@@ -28,13 +28,13 @@ MON = dt.date(2026, 9, 21)  # a Monday
 WED = MON + dt.timedelta(days=2)
 DAYS = render.week_days(MON)
 
-V2_EMPTY = {"keywords": [], "til": [], "kpt": {"keep": "", "problem": "", "try": ""}, "prompt_coaching": [],
-            "automation_ideas": []}  # template v2 fields, left empty (the LLM may)
+V2_EMPTY = {"keywords": [], "til": [], "open_questions": [], "kpt": {"keep": "", "problem": "", "try": ""},
+            "prompt_coaching": [], "automation_ideas": []}  # template v2 fields, left empty (the LLM may)
 DAILY = dict(V2_EMPTY, **{
     "one_line": "결제 흐름을 고쳤다",
     "done": [{"time": "09:05", "project": "shop", "result": "결제 버그 수정", "status": "완료",
               "evidence": [{"time": "12:00", "source": "git"}]}],
-    "decisions": [], "blockers": [], "tomorrow": [], "first_task_tomorrow": "",
+    "decisions": [], "blockers": [], "tomorrow": [], "first_task_tomorrow": "", "continue_next": [],
     "activity_mix": [{"type": "개발", "percent": 100}],
     "project_labels": [],
 })

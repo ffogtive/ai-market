@@ -176,6 +176,9 @@ def v2_props(when):
         "keywords": string_list("대표 단어 정확히 3개"),
         "til": {"type": "array", "description": "학습 후보: 로그에서 드러난 새 사실·결론 0~3개",
                 "items": strict({"text": string_prop("한 문장"), "evidence": refs(when)})},
+        "open_questions": {"type": "array", "description": "물었지만 기록상 답이 안 보이는 것. 일간은 오늘 질문 중 "
+                           "최대 3개, 주간은 여러 날 반복해서 물은 주제만(1회성 질문은 제외). 없으면 빈 배열",
+                           "items": strict({"text": string_prop("질문 요지 한 문장"), "evidence": refs(when)})},
         "kpt": strict({"keep": string_prop("계속할 것 1~2줄"), "problem": string_prop("문제였던 것 1~2줄"),
                        "try": string_prop("다음에 해볼 것 1~2줄")}),
         "prompt_coaching": {"type": "array", "description": "검토할 지시 0~1개. 로그의 실제 지시를 인용할 수 있을 때만",
@@ -195,7 +198,8 @@ SUMMARY_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "required": ["one_line", "keywords", "done", "decisions", "blockers", "tomorrow", "first_task_tomorrow", "til",
-                 "kpt", "prompt_coaching", "automation_ideas", "activity_mix", "project_labels"],
+                 "open_questions", "continue_next", "kpt", "prompt_coaching", "automation_ideas", "activity_mix",
+                 "project_labels"],
     "properties": {
         "one_line": {"type": "string", "description": "하루를 한 문장으로. 결과물 중심."},
         "keywords": DAY_V2["keywords"],
@@ -211,6 +215,12 @@ SUMMARY_SCHEMA = {
         "tomorrow": {"type": "array", "items": {"type": "string"}},
         "first_task_tomorrow": string_prop("내일 바로 시작할 수 있는 크기의 첫 할 일 1개 (없으면 빈 문자열)"),
         "til": DAY_V2["til"],
+        "open_questions": DAY_V2["open_questions"],
+        "continue_next": {"type": "array", "description": "🔁 이어가기: 프로젝트마다 다음에 이어서 할 일 한 줄. "
+                          "근거는 그 프로젝트의 마지막 내 지시 시각(위 [자동 계산 지표]의 안내 참고). 근거 없으면 text를 빈 문자열로",
+                          "items": strict({"project": string_prop("로그의 프로젝트 이름 (raw, project_labels의 raw와 동일)"),
+                                          "text": string_prop("다음에 이어서 할 일 한 줄 (근거 없으면 빈 문자열)"),
+                                          "evidence": refs("HH:MM")})},
         "kpt": DAY_V2["kpt"],
         "prompt_coaching": DAY_V2["prompt_coaching"],
         "automation_ideas": DAY_V2["automation_ideas"],
@@ -226,7 +236,8 @@ SUMMARY_SCHEMA = {
 }
 
 HONESTY = """- 요청은 완료 증거가 아닙니다. 완료가 기록(커밋, 완료 언급)에 있을 때만 status를 "완료"로, 아니면 "요청함"으로 쓰세요.
-- evidence에는 근거가 된 로그 줄의 시각과 도구를 적으세요. til(학습 후보)·prompt_coaching은 근거 줄이 있을 때만 쓰고, 없으면 빈 배열.
+- evidence에는 근거가 된 로그 줄의 시각과 도구를 적으세요. til(학습 후보)·prompt_coaching·open_questions는 근거 줄이 있을 때만 쓰고, 없으면 빈 배열.
+- open_questions는 실제로 물어봤는데 로그에 답이 없는 질문만 적으세요. 추측으로 채우거나 답이 로그에 있는 질문을 넣지 마세요.
 - prompt_coaching은 로그의 실제 지시를 인용할 수 있을 때 0~1개. automation_ideas는 [반복 요청 Top]만 보고 0~3개, 없으면 빈 배열.
 - [자동 계산 지표]는 이미 센 값입니다. 다시 세거나 옮겨 적지 말고 해석의 근거로만 쓰세요. 점수·평가는 하지 마세요.
 - 여러 프로젝트를 오간 것, 활동 시간대, 활동량을 산만함·집중력·성실함으로 해석하지 마세요. 자동 실행이 함께 돌기 때문에 프로젝트를 오가는 것은 기본 모습입니다.
@@ -237,6 +248,8 @@ SYSTEM = """당신은 사용자의 하루 활동 로그를 읽고 일간 회고�
 - '무엇을 했나'보다 '무엇이 결과로 남았나'를 적으세요. 지시 문장을 그대로 옮기지 말고 결과로 바꿔 쓰세요.
 - done은 시간순 5~10개, decisions는 사용자가 명시적으로 확정·승인·방향 전환한 것만, blockers는 반복된 문제나 대기·비용 이슈.
 - tomorrow는 로그에서 이어질 것이 분명한 일만. 추측으로 채우지 마세요. first_task_tomorrow는 바로 시작할 수 있는 크기의 1개.
+- continue_next는 프로젝트마다 "다음에 이어서 할 일" 한 줄. 근거는 그 프로젝트의 마지막 내 지시 시각. 근거가 없으면 text를 빈 문자열로.
+- open_questions는 오늘 물었지만 기록상 답이 안 보이는 것 최대 3개. 없으면 빈 배열.
 - activity_mix의 percent 합은 100. keywords는 오늘을 대표하는 단어 3개, kpt는 Keep·Problem·Try 각 1~2줄 초안.
 """ + HONESTY
 DAILY_TASK = "표준 입력의 로그로 일간 회고를 작성하세요."
@@ -245,8 +258,8 @@ WEEK_V2 = v2_props("요일 HH:MM (예: 화 14:05)")
 WEEK_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["one_line", "keywords", "highlights", "decisions", "blockers", "next_week", "til", "kpt",
-                 "prompt_coaching", "automation_ideas", "activity_mix", "project_labels"],
+    "required": ["one_line", "keywords", "highlights", "decisions", "blockers", "next_week", "til",
+                 "open_questions", "kpt", "prompt_coaching", "automation_ideas", "activity_mix", "project_labels"],
     "properties": {
         "one_line": {"type": "string", "description": "한 주를 한 문장으로. 결과물 중심."},
         "keywords": WEEK_V2["keywords"],
@@ -261,6 +274,7 @@ WEEK_SCHEMA = {
         "blockers": {"type": "array", "description": "여러 날 반복된 문제·대기·비용 이슈와 패턴", "items": {"type": "string"}},
         "next_week": {"type": "array", "items": {"type": "string"}},
         "til": WEEK_V2["til"],
+        "open_questions": WEEK_V2["open_questions"],
         "kpt": WEEK_V2["kpt"],
         "prompt_coaching": WEEK_V2["prompt_coaching"],
         "automation_ideas": WEEK_V2["automation_ideas"],
@@ -274,6 +288,7 @@ WEEK_SYSTEM = """당신은 사용자의 한 주 활동 로그를 읽고 주간 �
 - '무엇을 했나'보다 '무엇이 결과로 남았나'를 적으세요. 지시 문장을 그대로 옮기지 말고 결과로 바꿔 쓰세요.
 - highlights는 요일순 5~10개, decisions는 사용자가 명시적으로 확정·승인·방향 전환한 것만, blockers는 여러 날 반복된 문제나 대기·비용 이슈, 되풀이되는 작업 패턴.
 - next_week는 로그에서 이어질 것이 분명한 일만. 추측으로 채우지 마세요.
+- open_questions는 이번 주 여러 날에 걸쳐 반복해서 물은 주제만(1회성 질문은 제외). 최대 3개, 없으면 빈 배열.
 - activity_mix의 percent 합은 100. keywords는 이번 주를 대표하는 단어 3개, kpt는 주간 Keep·Problem·Try 각 1~2줄 초안.
 """ + HONESTY
 WEEK_TASK = "표준 입력의 로그로 주간 회고를 작성하세요."
@@ -311,6 +326,9 @@ def build_prompt(day, events, stats):
         lines.append(f"{e['ts']:%H:%M} {e['source']} {proj}{e['text']}")
     facts = (f"날짜: {day}\n직접 입력한 AI 지시 {stats['prompts']}건, 에이전트 간 지시 {stats['agent']}건, "
              f"커밋 {stats['commits']}건(+{stats['add']}/-{stats['dele']}), 웹 방문 {stats['web']}건")
+    cont = analyze.continue_facts(analyze.continue_points(events))  # continue_next's evidence anchor (daily only)
+    if cont:
+        facts += f"\n{cont}"
     return f"{facts}\n{llm_facts(events)}\n\n<log>\n" + "\n".join(lines) + "\n</log>"
 
 
@@ -1084,6 +1102,71 @@ def decisions_blockers(s, b, blockers_head="🚧 막힌 것 · 리스크", clock
     return out
 
 
+# ---------------------------------------------------------------- 🔁 이어가기 (PLAN §9.1 + §9.4)
+CONTINUE_NOTE = "기록상 이 프로젝트를 다시 잡은 지점입니다. 실제 집중과 다를 수 있습니다."
+CONTINUE_SEGS_SHOWN = 4  # PLAN §9.4: show at most this many time ranges, fold the rest into "+n개"
+
+
+def continue_seg_text(seg):
+    """One pickup segment's time text: a single HH:MM when it was a single instruction, else a range."""
+    return f"{seg['start']:%H:%M}" if seg["start"] == seg["end"] else f"{seg['start']:%H:%M}–{seg['end']:%H:%M}"
+
+
+def continue_commit_line(commits):
+    """→ 이후 커밋 N건(HH:MM…) — only when there is at least one. PLAN §9.4: never "이후 커밋 없음";
+
+    a real day had instructions and commits on different projects, so a placeholder on every project
+    would falsely read as "nothing got finished".
+    """
+    return f' → 이후 커밋 {len(commits)}건({commits[0]["ts"]:%H:%M}…)' if commits else ""
+
+
+def continue_next_map(s):
+    """{raw project: "다음에 이어서 할 일" one-liner} from the summary's continue_next, text-only entries."""
+    return {c.get("project"): c["text"] for c in (s or {}).get("continue_next") or []
+            if isinstance(c, dict) and c.get("project") and c.get("text")}
+
+
+def continue_row(p, name, next_map):
+    """One project's <li>: segment summary, last instruction (if any, PLAN §9.4 tag-skip already applied), next step."""
+    label = esc(name(p["project"]))
+    if p["count"] == 1:  # PLAN §9.1: a single instruction is a time, not a "1개 구간" range
+        seg_text = continue_seg_text(p["segments"][0])
+    else:
+        shown = p["segments"][:CONTINUE_SEGS_SHOWN]
+        extra = len(p["segments"]) - len(shown)
+        seg_text = (f'{len(p["segments"])}개 구간 · ' + ", ".join(map(continue_seg_text, shown))
+                    + (f", +{extra}개" if extra else ""))
+    out = f'<li><b>{label}</b> {seg_text} · 지시 {p["count"]}건'
+    if p["last"]:
+        out += (f'<br><span class="sub">마지막({p["last"]["ts"]:%H:%M}) “{esc(p["last"]["text"])}”'
+                f'{continue_commit_line(p["commits"])}</span>')
+    next_text = next_map.get(p["project"])
+    if next_text:
+        out += f'<br><span class="sub">→ 다음: {esc(next_text)}</span>'
+    return out + "</li>"
+
+
+def continue_section(events, s, name):
+    """🔁 이어가기: where each project was last picked up today (PLAN §9.1 + §9.4). Sits just above ➡️ 내일로,
+    shown by default (not folded).
+
+    Skipped entirely with one or fewer real (non-tmp) projects — with nothing to compare, "이어가기" has no
+    meaning (PLAN §9.4). Scratch (tmp.*) projects are kept out of the list and named in one closing line.
+    """
+    points = analyze.continue_points(events)
+    real = [p for p in points if not p["tmp"]]
+    if len(real) <= 1:
+        return ""
+    tmp = [p for p in points if p["tmp"]]
+    next_map = continue_next_map(s)
+    body = "<ul>" + "".join(continue_row(p, name, next_map) for p in real) + "</ul>"
+    if tmp:
+        body += ('<p class="sub">임시 폴더: ' + ", ".join(f"{esc(name(p['project']))} {p['count']}건" for p in tmp)
+                 + "</p>")
+    return f'<h2>🔁 이어가기</h2><p class="sub">{CONTINUE_NOTE}</p>{body}'
+
+
 def next_section(s, key="tomorrow", head="➡️ 내일로", mine=""):
     """➡️ 내일로 (내일 첫 할 일 on top) — or 다음 주로 on the weekly page. mine: the first task I saved (wins over the draft)."""
     first, items = mine or s.get("first_task_tomorrow"), s.get(key) or []
@@ -1232,7 +1315,18 @@ def til_body(s):
         elif isinstance(x, dict) and x.get("text"):
             ref = refs_text(x.get("evidence"))
             items.append(esc(x["text"]) + (f' <span class="sub">({esc(ref)})</span>' if ref else ""))
-    return "<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>" if items else ""
+    body = "<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>" if items else ""
+    return body + open_questions_body(s)
+
+
+def open_questions_body(s):
+    """❓ 물었지만 기록상 답이 안 보이는 것 (PLAN §9.2): shown small, next to 학습 후보. Empty when there are none."""
+    items = [x for x in s.get("open_questions") or [] if isinstance(x, dict) and x.get("text")]
+    if not items:
+        return ""
+    rows = "".join(f'<li>{esc(x["text"])}' + (f' <span class="sub">({esc(refs_text(x.get("evidence")))})</span>'
+                   if refs_text(x.get("evidence")) else "") + "</li>" for x in items)
+    return f'<div class="sub" style="margin-top:14px">❓ 물었지만 기록상 답이 안 보이는 것</div><ul>{rows}</ul>'
 
 
 def slice_note(label):
@@ -1389,8 +1483,8 @@ def slice_panel(key, label, events, s, name, stale="", mine=None):
         parts.append(f'<p class="sub" style="margin-top:24px">{label}에는 기록이 없습니다.</p>')
     parts.append(done_section(s, key, name))
     if day_level:
-        parts += [decisions_blockers(s, b), mine.get("next") or next_section(s), mine.get("kpt") or kpt_section(s.get("kpt")),
-                  more("📚 학습 후보", til_body(s))]
+        parts += [decisions_blockers(s, b), continue_section(events, s, name), mine.get("next") or next_section(s),
+                  mine.get("kpt") or kpt_section(s.get("kpt")), more("📚 학습 후보", til_body(s))]
     else:
         parts.append(slice_note(label))
     if events:

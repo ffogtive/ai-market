@@ -51,6 +51,8 @@ FULL_DAILY = {
     "tomorrow": ["가격 페이지 문구 다듬기"],
     "first_task_tomorrow": "가격 페이지 첫 문단 쓰기",
     "til": [{"text": "결제 웹훅은 재시도된다", "evidence": [{"time": "09:30", "source": "claude"}]}],
+    "open_questions": [{"text": "가격은 언제부터 적용?", "evidence": [{"time": "11:59", "source": "claude"}]}],
+    "continue_next": [{"project": "blog", "text": "가격 페이지 문구 다듬기", "evidence": [{"time": "15:00", "source": "codex"}]}],
     "kpt": {"keep": "작게 커밋", "problem": "테스트가 느림", "try": "테스트 병렬화"},
     "prompt_coaching": [
         {"kind": "고칠 점", "prompt": "add tests", "better": "결제 실패 경로에 테스트 3개 추가해줘", "why": "범위가 드러남",
@@ -69,6 +71,7 @@ FULL_WEEKLY = {
                     "evidence": [{"time": "월 12:30", "source": "git"}]}],
     "decisions": [], "blockers": [], "next_week": ["출시 공지"],
     "til": [{"text": "웹훅은 재시도된다", "evidence": [{"time": "월 09:30", "source": "claude"}]}],
+    "open_questions": [{"text": "가격은 언제부터 적용?", "evidence": [{"time": "월 11:59", "source": "claude"}]}],
     "kpt": {"keep": "작게 커밋", "problem": "테스트가 느림", "try": "병렬화"},
     "prompt_coaching": [], "automation_ideas": [],
     "activity_mix": [{"type": "개발", "percent": 100}],
@@ -197,7 +200,7 @@ class TabsTest(Site):
 
 
 class SectionsTest(Site):
-    FIRST_VIEW = ["💡", "📊 오늘의 숫자", "✅ 한 일", "🧭 결정한 것", "🚧 막힌 것", "➡️ 내일로", "✍️ KPT",
+    FIRST_VIEW = ["💡", "📊 오늘의 숫자", "✅ 한 일", "🧭 결정한 것", "🚧 막힌 것", "🔁 이어가기", "➡️ 내일로", "✍️ KPT",
                   "📚 학습 후보", "⏱ 흐름", "🧠 프롬프트 문구 신호", "🤖 AI 사용", "🌐 탐색"]
 
     def test_with_summary(self):
@@ -211,17 +214,21 @@ class SectionsTest(Site):
                      "작게 커밋", "결제 웹훅은 재시도된다", "(09:30 claude)", "09:05 claude, 12:30 git",
                      '<span class="chip">요청함</span>', "자동화 검토 후보", "커밋 전에 테스트를 자동 실행",
                      "검토할 지시 후보", "결제 실패 경로에 테스트 3개 추가해줘", "연속 활동 구간", "기록상 프로젝트 변경",
-                     "내 지시 1건당 자동 실행", "자동 분류, 추정", "작업 직전 탐색", "stripe.com", "활동 유형 (AI 추정)"):
+                     "내 지시 1건당 자동 실행", "자동 분류, 추정", "작업 직전 탐색", "stripe.com", "활동 유형 (AI 추정)",
+                     "기록상 이 프로젝트를 다시 잡은 지점입니다", "→ 다음: 가격 페이지 문구 다듬기",
+                     "❓ 물었지만 기록상 답이 안 보이는 것", "가격은 언제부터 적용?"):
             self.assertIn(part, day)
         self.assertNotIn("두 번째 코칭", day)  # at most one coaching item
+        self.assertNotIn("<details open", day)
+        self.assertNotIn("<details class=\"more\"><summary><h2>🔁 이어가기", day)  # shown by default, not folded
 
     def test_without_summary(self):
         page = self.render(MON, "--llm", "none")
         day = panel(page, "all")
         for part in ("📊 오늘의 숫자", "⏱ 흐름", "연속 활동 구간", "🧠 프롬프트 문구 신호", "🤖 AI 사용", "🌐 탐색",
-                     "작업 직전 탐색", "✍️ KPT", "(직접 작성)"):
+                     "작업 직전 탐색", "✍️ KPT", "(직접 작성)", "🔁 이어가기"):  # computed, no LLM needed (PLAN §9.1)
             self.assertIn(part, day)
-        for llm_only in ("💡", "✅ 한 일", "📚 학습 후보", "내일 첫 할 일", "자동화 검토 후보", "검토할 지시 후보"):
+        for llm_only in ("💡", "✅ 한 일", "📚 학습 후보", "내일 첫 할 일", "자동화 검토 후보", "검토할 지시 후보", "→ 다음:"):
             self.assertNotIn(llm_only, day)
         self.assertIn("숫자만 표시 — 요약 끔", page)
 
@@ -241,6 +248,90 @@ class SectionsTest(Site):
         self.assertEqual(render.coaching(s), "")
         self.assertEqual(render.coaching(dict(FULL_DAILY, prompt_coaching=[])), "")
         self.assertIn("add tests", render.coaching(FULL_DAILY))
+
+
+class ContinueSectionTest(unittest.TestCase):
+    """🔁 이어가기: PLAN §9.1 + the §9.4 corrections found by running it on real data."""
+
+    def page(self, events, summary=None):
+        return render.render_page(MON, render.day_stats(events), summary, events)
+
+    def test_skipped_with_one_real_project(self):
+        events = [ev(MON, (9, 0), "claude", "only project", "shop")]
+        self.assertNotIn("🔁 이어가기", self.page(events))
+
+    def test_shown_with_two_or_more_real_projects(self):
+        events = [ev(MON, (9, 0), "claude", "a", "shop"), ev(MON, (10, 0), "codex", "b", "blog")]
+        day = panel(self.page(events), "all")
+        self.assertIn("🔁 이어가기", day)
+        self.assertIn("기록상 이 프로젝트를 다시 잡은 지점입니다", day)
+
+    def test_computed_without_an_llm_summary(self):
+        """§9.1: this section is pure computation — it needs no summary at all."""
+        events = [ev(MON, (9, 0), "claude", "a", "shop"), ev(MON, (10, 0), "codex", "b", "blog")]
+        self.assertIn("🔁 이어가기", self.page(events, summary=None))
+
+    def test_single_instruction_project_shows_a_time_not_a_range(self):
+        events = [ev(MON, (9, 0), "claude", "a", "shop"), ev(MON, (9, 5), "claude", "b", "shop"),
+                  ev(MON, (10, 0), "codex", "only one", "blog")]
+        day = panel(self.page(events), "all")
+        self.assertIn("<b>shop</b> 1개 구간 · 09:00–09:05 · 지시 2건", day)  # 2 instructions: a range is fine
+        self.assertIn("<b>blog</b> 10:00 · 지시 1건", day)  # 1 instruction total: a time, not "1개 구간"
+        self.assertNotIn("blog</b> 1개 구간", day)
+
+    def test_more_than_four_segments_fold(self):
+        """9/24 실데이터: pet이 새벽 단발 지시들 때문에 7구간 — 4개까지만 보이고 나머지는 +n개로 접는다."""
+        events = [ev(MON, (h, 0), "claude", f"p{h}", "shop") for h in (0, 2, 4, 6, 8)]  # 45분 넘게 떨어져 5구간
+        events.append(ev(MON, (20, 0), "codex", "other project", "blog"))
+        day = panel(self.page(events), "all")
+        self.assertIn("5개 구간", day)
+        self.assertIn("00:00, 02:00, 04:00, 06:00, +1개", day)  # 4개만 시각으로, 나머지는 접힘
+
+    def test_commit_line_only_when_a_commit_exists(self):
+        with_commit = [ev(MON, (9, 0), "claude", "a", "shop"), ev(MON, (9, 30), "git", "fix (+1/-0)", "shop"),
+                       ev(MON, (10, 0), "codex", "b", "blog")]
+        day = panel(self.page(with_commit), "all")
+        self.assertIn("이후 커밋 1건(09:30…)", day)
+        self.assertNotIn("이후 커밋 없음", day)
+
+    def test_no_line_at_all_without_a_commit(self):
+        """§9.4: 9/24 실데이터는 지시가 남은 프로젝트와 커밋이 남은 프로젝트가 달라 매번 "없음"이 찍혔다 —
+        "아무것도 안 끝냈다"는 틀린 신호라 커밋 줄 자체를 아예 생략한다."""
+        events = [ev(MON, (9, 0), "claude", "a", "shop"), ev(MON, (10, 0), "codex", "b", "blog")]
+        day = panel(self.page(events), "all")
+        self.assertNotIn("이후 커밋", day)
+
+    def test_last_instruction_skips_attachment_only_tail(self):
+        """§9.4: 첨부만 있는 지시가 마지막이면 그 앞의 내용 있는 지시를 쓴다."""
+        events = [ev(MON, (9, 0), "claude", "실제 내용 있는 지시", "shop"), ev(MON, (9, 10), "claude", "[첨부 파일]", "shop"),
+                  ev(MON, (10, 0), "codex", "b", "blog")]
+        day = panel(self.page(events), "all")
+        self.assertIn("실제 내용 있는 지시", day)
+        self.assertNotIn("[첨부 파일]", day)
+
+    def test_all_tag_only_omits_the_last_line_entirely(self):
+        """§9.4: 전부 태그뿐이면 마지막 지시 줄 자체를 생략한다 (빈 인용부호로 찍지 않는다)."""
+        events = [ev(MON, (9, 0), "claude", "[첨부 파일]", "shop"), ev(MON, (9, 10), "claude", "[음성]", "shop"),
+                  ev(MON, (10, 0), "codex", "b", "blog")]
+        day = panel(self.page(events), "all")
+        shop_row = day.split("<b>shop</b>")[1].split("</li>")[0]
+        self.assertNotIn("마지막(", shop_row)
+
+    def test_tmp_projects_are_named_apart_not_listed(self):
+        events = [ev(MON, (9, 0), "claude", "a", "shop"), ev(MON, (10, 0), "codex", "b", "blog"),
+                  ev(MON, (11, 0), "codex", "scratch work", "tmp.k12UodOzwB")]
+        day = panel(self.page(events), "all")
+        self.assertIn("임시 폴더: tmp.k12UodOzwB 1건", day)
+        self.assertNotIn("<b>tmp.k12UodOzwB</b>", day)
+
+    def test_continue_next_and_open_questions_render(self):
+        events = [ev(MON, (9, 0), "claude", "a", "shop"), ev(MON, (10, 0), "codex", "b", "blog")]
+        summary = dict(FULL_DAILY, continue_next=[{"project": "shop", "text": "다음엔 결제 테스트",
+                       "evidence": []}], open_questions=[{"text": "이거 왜 이래?", "evidence": []}])
+        day = panel(self.page(events, summary), "all")
+        self.assertIn("→ 다음: 다음엔 결제 테스트", day)
+        self.assertIn("❓ 물었지만 기록상 답이 안 보이는 것", day)
+        self.assertIn("이거 왜 이래?", day)
 
 
 class CoverageTest(Site):

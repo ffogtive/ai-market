@@ -15,7 +15,7 @@ cues, not line counts. All classifications are heuristics: show them as
 import datetime as dt
 import difflib
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 
 AI_SOURCES = ("claude", "codex", "claude.ai", "chatgpt")  # same as render.AI_SOURCES
 WEB_SOURCES = ("chrome",)  # same as render's "web" count
@@ -35,6 +35,8 @@ FACTS_LIMIT = 600
 FACTS_OMITTED = "(일부 생략)"  # last line of facts_for_llm when lines were dropped
 AGAIN_SHORT = 30  # "다시" alone is a complaint only in a prompt this short (or next to a complaint cue)
 PRE_BROWSE = dt.timedelta(minutes=10)  # web visits this soon before a prompt: "작업 직전 탐색"
+CONTINUE_GAP = dt.timedelta(minutes=45)  # a project's own gap longer than this starts a new pickup block (PLAN §9.1)
+TMP_PREFIX = "tmp."  # projects named like this are scratch folders, shown apart in "🔁 이어가기" (PLAN §9.4)
 
 # ---------------------------------------------------------------- time slices
 SLICES = {"all": (0, 24), "am": (0, 12), "pm": (12, 24)}  # [start hour, end hour)
@@ -320,6 +322,84 @@ def median(xs):
     mid = len(xs) // 2
     m = xs[mid] if len(xs) % 2 else (xs[mid - 1] + xs[mid]) / 2
     return int(m) if m == int(m) else m
+
+
+# ---------------------------------------------------------------- 🔁 이어가기 (PLAN §9.1 + §9.4)
+def is_tmp_project(project):
+    """A scratch folder (e.g. "tmp.k12UodOzwB"), shown apart from real projects in "🔁 이어가기"."""
+    return (project or "").startswith(TMP_PREFIX)
+
+
+def last_instruction(prompts):
+    """The most recent prompt in prompts with content once collect.py's tags are stripped (PLAN §9.4).
+
+    A prompt that is only "[첨부 파일]"/"[음성]"/"[사진 n장]" has nothing to show, so it is skipped in
+    favor of the content-bearing prompt before it. None when every prompt here is tag-only (or there are none).
+    """
+    for e in reversed(prompts):
+        if clean(e["text"]):
+            return e
+    return None
+
+
+def continue_points(events):
+    """Where each project was last picked up today, for "🔁 이어가기" (PLAN §9.1 + §9.4).
+
+    events: one day's events (or a slice), sorted by ts. Only the user's own AI prompts ("내 지시")
+    build the segments and count — a project with none is left out.
+
+    Returns a list of {project, tmp (bool, see is_tmp_project), segments [{start, end}] (chains of
+    prompts with no gap over CONTINUE_GAP; a lone prompt is its own segment with start == end),
+    count (prompts), last ({ts, text (<=200 chars, tags stripped)} | None, see last_instruction),
+    commits ([{ts, text}], strictly after last's ts, same project; empty when last is None or there
+    are none — PLAN §9.4: no commits is not shown as a fact, so an empty list, never a placeholder)},
+    most active project first (ties broken by name).
+    """
+    by_project, commits_by_project = defaultdict(list), defaultdict(list)
+    for e in events:
+        if not e["project"]:
+            continue
+        if is_prompt(e):
+            by_project[e["project"]].append(e)
+        elif is_commit(e):
+            commits_by_project[e["project"]].append(e)
+
+    out = []
+    for project, prompts in by_project.items():
+        segs, cur = [], []
+        for e in prompts:
+            if cur and e["ts"] - cur[-1]["ts"] > CONTINUE_GAP:
+                segs.append(cur)
+                cur = []
+            cur.append(e)
+        if cur:
+            segs.append(cur)
+        segments = [{"start": c[0]["ts"], "end": c[-1]["ts"]} for c in segs]
+        last = last_instruction(prompts)
+        commits = [{"ts": c["ts"], "text": c["text"]} for c in commits_by_project.get(project, [])
+                   if last and c["ts"] > last["ts"]]
+        out.append({
+            "project": project,
+            "tmp": is_tmp_project(project),
+            "segments": segments,
+            "count": len(prompts),
+            "last": {"ts": last["ts"], "text": clean(last["text"])[:200]} if last else None,
+            "commits": commits,
+        })
+    out.sort(key=lambda p: (-p["count"], p["project"]))
+    return out
+
+
+def continue_facts(points, limit=4):
+    """Per-project last-instruction anchors for continue_next's evidence (real projects only).
+
+    None when there is nothing to anchor (no project has a content-bearing last instruction).
+    """
+    real = [p for p in points if not p["tmp"] and p["last"]]
+    if not real:
+        return None
+    items = ", ".join(f"{p['project'][:20]} {p['last']['ts']:%H:%M}" for p in real[:limit])
+    return f"프로젝트별 마지막 내 지시 시각(첨부·음성만 있는 지시는 제외): {items}"
 
 
 # ---------------------------------------------------------------- work rhythm

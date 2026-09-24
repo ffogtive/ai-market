@@ -334,6 +334,73 @@ class RhythmTest(unittest.TestCase):
         self.assertEqual((r["focus_minutes"], r["longest"], r["switches"], r["max_concurrent"]), (0, None, 0, 0))
 
 
+class ContinuePointsTest(unittest.TestCase):
+    """🔁 이어가기 (PLAN §9.1): per-project pickup segments, last instruction, commits after it."""
+
+    def test_gap_45_chains_gap_46_breaks(self):
+        chained = an.continue_points([prompt(at(0), "a"), prompt(at(44), "b"), prompt(at(89), "c")])  # gaps 44, 45
+        self.assertEqual(len(chained[0]["segments"]), 1)
+        split = an.continue_points([prompt(at(0), "a"), prompt(at(46), "b")])  # gap 46 > CONTINUE_GAP
+        self.assertEqual(len(split[0]["segments"]), 2)
+
+    def test_lone_instruction_segment_has_equal_start_and_end(self):
+        p = an.continue_points([prompt(at(0), "only one")])[0]
+        self.assertEqual((p["count"], p["segments"]), (1, [{"start": at(0), "end": at(0)}]))
+
+    def test_last_instruction_skips_attachment_only_tail(self):
+        """PLAN §9.4: 첨부·음성 태그를 떼면 내용이 없는 지시는 건너뛰고 그 앞의 내용 있는 지시를 쓴다."""
+        events = [prompt(at(0), "실제 지시 내용"), prompt(at(10), "[첨부 파일]"), prompt(at(20), "[음성]")]
+        p = an.continue_points(events)[0]
+        self.assertEqual((p["last"]["ts"], p["last"]["text"]), (at(0), "실제 지시 내용"))
+
+    def test_last_instruction_none_when_every_prompt_is_tag_only(self):
+        p = an.continue_points([prompt(at(0), "[첨부 파일]"), prompt(at(10), "[음성]")])[0]
+        self.assertIsNone(p["last"])
+        self.assertEqual(p["commits"], [])  # nothing to anchor "after the last instruction" to
+
+    def test_last_instruction_text_is_clipped_to_200_chars(self):
+        p = an.continue_points([prompt(at(0), "x" * 250)])[0]
+        self.assertEqual(len(p["last"]["text"]), 200)
+
+    def test_commits_only_count_strictly_after_the_last_instruction(self):
+        events = [prompt(at(0), "a"), ev(at(5), "git", "old commit", "shop"),
+                  prompt(at(10), "b"), ev(at(20), "git", "new commit", "shop")]
+        p = an.continue_points(events)[0]
+        self.assertEqual(p["last"]["ts"], at(10))
+        self.assertEqual([c["text"] for c in p["commits"]], ["new commit"])
+
+    def test_no_commits_is_an_empty_list(self):
+        """PLAN §9.4: "이후 커밋 없음"을 나타내는 특수 값이 아니라 그냥 빈 리스트 — render가 줄 자체를 생략한다."""
+        self.assertEqual(an.continue_points([prompt(at(0), "a")])[0]["commits"], [])
+
+    def test_tmp_projects_are_flagged(self):
+        self.assertTrue(an.continue_points([prompt(at(0), "a", project="tmp.k12UodOzwB")])[0]["tmp"])
+        self.assertFalse(an.continue_points([prompt(at(0), "a", project="shop")])[0]["tmp"])
+
+    def test_projects_without_prompts_are_excluded(self):
+        self.assertEqual(an.continue_points([ev(at(0), "git", "x", "shop")]), [])
+        self.assertEqual(an.continue_points([prompt(at(0), "a", project="")]), [])
+
+    def test_sorted_by_count_descending(self):
+        events = [prompt(at(0), "a", "small")] + [prompt(at(i * 50), f"p{i}", "big") for i in range(3)]
+        points = an.continue_points(events)
+        self.assertEqual([p["project"] for p in points], ["big", "small"])
+
+
+class ContinueFactsTest(unittest.TestCase):
+    def test_anchors_real_projects_with_a_last_instruction(self):
+        events = [prompt(at(0), "a", "shop"), prompt(at(50), "b", "blog")]
+        facts = an.continue_facts(an.continue_points(events))
+        self.assertIn("shop", facts)
+        self.assertIn("blog", facts)
+
+    def test_none_when_nothing_to_anchor(self):
+        self.assertIsNone(an.continue_facts(an.continue_points([prompt(at(0), "[첨부 파일]", "shop")])))
+
+    def test_tmp_projects_are_excluded_from_anchors(self):
+        self.assertIsNone(an.continue_facts(an.continue_points([prompt(at(0), "a", "tmp.xyz")])))
+
+
 class HeatmapTest(unittest.TestCase):
     def test_shape_and_counts(self):
         days = [DAY + dt.timedelta(days=i) for i in range(7)]

@@ -159,6 +159,8 @@ SUMMARY = {
     "blockers": ["테스트가 자주 깨짐"],
     "next_week": ["출시 공지"],
     "til": [{"text": "월 구독이 해지율이 낮다", "evidence": [{"time": "수 14:00", "source": "claude.ai"}]}],
+    "open_questions": [{"text": "가격은 언제부터 적용?", "evidence": [{"time": "월 09:30", "source": "claude"},
+                                                          {"time": "수 14:00", "source": "claude.ai"}]}],
     "kpt": {"keep": "커밋을 작게", "problem": "테스트가 느림", "try": "테스트 병렬화"},
     "prompt_coaching": [{"kind": "고칠 점", "prompt": "add tests", "better": "결제 실패 경로에 테스트 3개 추가해줘",
                          "why": "범위가 드러남", "evidence": [{"time": "월 09:30", "source": "claude"}]}],
@@ -190,12 +192,14 @@ class RenderWeekTest(unittest.TestCase):
         for part in ("한 줄 요약", "이번 주 한 일", "결제 버그 수정", "결정한 것", "반복된 문제", "다음 주로",
                      "활동 유형", "요약은 Claude가 작성", "학습 후보", "월 구독이 해지율이 낮다", "주간 KPT", "테스트 병렬화",
                      "자동화 검토 후보", "커밋 전에 테스트를 자동 실행", "검토할 지시 후보", "결제 실패 경로에 테스트 3개 추가해줘",
-                     '<span class="chip">결제</span>', '<span class="chip">요청함</span>', "월 12:00 git"):
+                     '<span class="chip">결제</span>', '<span class="chip">요청함</span>', "월 12:00 git",
+                     "❓ 물었지만 기록상 답이 안 보이는 것", "가격은 언제부터 적용?"):
             self.assertIn(part, page)
         self.assertIn("쇼핑몰", page)  # project labels apply to the chips, bars and table
         self.assertNotIn("<td>shop</td>", page)
         self.assertNotIn("<script>", page)
         self.assertIn("&lt;script&gt;", page)
+        self.assertNotIn("🔁 이어가기", page)  # PLAN §9.1: per-project continuing is daily-only, not duplicated weekly
 
     def test_month_boundary_title(self):
         days = render.week_days(dt.date(2026, 10, 1))
