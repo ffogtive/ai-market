@@ -1,6 +1,6 @@
 # retro MCP server (PoC)
 
-각 AI 앱(Claude·ChatGPT·Gemini)에 커넥터로 붙여, 대화가 끝날 때 AI가 `log_activity`로 하루 기록을 남기고 `get_today`로 회고 페이지를 보는 최소 서버. Cloudflare Worker + KV.
+각 AI 앱(Claude·ChatGPT·Gemini)에 커넥터로 붙여, 대화가 끝날 때 AI가 `log_activity`로 하루 기록을 남기고 `get_today`로 회고 페이지를 보며, `forget`으로 지우는 최소 서버. 무엇을 저장·삭제하는지는 [`../PRIVACY.md`](../PRIVACY.md). Cloudflare Worker + KV.
 
 - `POST /mcp/<key>` — MCP (Streamable HTTP, 상태 없음, JSON 응답)
 - `GET /p/<key>/<date>` — 그날의 회고 페이지 (LLM 없이 서버에서 계산)
@@ -23,4 +23,4 @@ npm test        # 공식 MCP SDK 클라이언트로 e2e
 출력된 `https://retro-mcp.<서브도메인>.workers.dev/mcp/<key>`를 Claude "설정 → 커넥터 → 커스텀 커넥터 추가"에 넣습니다(인증 없음 — OAuth 탐색 경로는 404라 Claude가 authless로 연결). URL 자체가 비밀번호이므로 공유 금지.
 
 ## 토큰
-연결된 대화마다 도구 정의(~260 토큰, chars/4 추정)가 맥락에 들어가고, 호출 1회는 인자+결과로 대화당 100~150 토큰 수준. 시각은 서버가 찍고 결과는 한 줄이라 모델 출력 토큰을 최소화. 통계·페이지는 서버가 LLM 없이 계산.
+연결된 대화마다 도구 정의(~370 토큰, chars/4 추정. 도구 3개)가 맥락에 들어가고, 호출 1회는 인자+결과로 대화당 100~150 토큰 수준. 시각은 서버가 찍고 결과는 한 줄이라 모델 출력 토큰을 최소화. 통계·페이지는 서버가 LLM 없이 계산.
