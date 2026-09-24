@@ -33,6 +33,7 @@ import render  # noqa: E402
 CONFIG = os.path.expanduser("~/.config/retro/config.json")
 OUT_DIR = os.path.expanduser("~/Retro")
 COLLECT = os.path.join(HERE, "collect.py")
+EXTENSION_DIR = os.path.expanduser("~/Downloads/retro")  # where the browser extension saves browser-DATE.jsonl
 CHROME_HELP = (
     "Chrome 기록을 읽으려면 권한이 필요합니다: 시스템 설정 → 개인정보 보호 및 보안 → "
     "전체 디스크 접근 권한 → 사용 중인 터미널 앱 켜기 (건너뛰려면 --no-chrome)"
@@ -89,6 +90,17 @@ def collect_remote(ssh_cmd, days):
     return parse_jsonl(res.stdout.decode("utf-8", "replace")), res.stderr.decode("utf-8", "replace")
 
 
+def extension_events(day, days):
+    """browser-YYYY-MM-DD.jsonl files written by retro/extension (one full file per day)."""
+    out = []
+    for i in range(days + 1):
+        path = os.path.join(EXTENSION_DIR, f"browser-{day - dt.timedelta(days=i)}.jsonl")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                out += parse_jsonl(f.read())
+    return out
+
+
 def parse_jsonl(text):
     out = []
     for line in text.splitlines():
@@ -113,8 +125,16 @@ def cmd_run(args):
     days = (dt.date.today() - day).days + 7  # enough history for the 7-day chart
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    events, err = collect_local(days, not args.no_chrome)
+    ext_events = extension_events(day, days)
+    # the extension already records browsing; reading Chrome's DB too would double count
+    events, err = collect_local(days, chrome=not args.no_chrome and not ext_events)
     print(f"· 이 기기: {counts(err)}", file=sys.stderr)
+    if ext_events:
+        by = {}
+        for e in ext_events:
+            by[e["source"]] = by.get(e["source"], 0) + 1
+        print("· 브라우저 확장: " + ", ".join(f"{k} {v}" for k, v in by.items()), file=sys.stderr)
+        events += ext_events
     for ssh_cmd in cfg.get("hosts", []):
         got, err = collect_remote(ssh_cmd, days)
         status = counts(err) if got or "events" in err else f"실패 — {err.strip().splitlines()[-1] if err.strip() else '응답 없음'}"

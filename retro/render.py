@@ -27,13 +27,17 @@ MODEL = "claude-opus-5"
 ACTIVITY_TYPES = ["기획", "제작", "QA·검수", "개발", "리서치", "소통", "행정", "개인"]
 SERIES = [  # (key, label, css var) — stacking order in charts
     ("codex", "나 → Codex", "--c-codex"),
-    ("claude", "나 → Claude", "--c-claude"),
+    ("claude", "나 → Claude Code", "--c-claude"),
+    ("claude.ai", "나 → Claude 앱", "--c-claudeapp"),
+    ("chatgpt", "나 → ChatGPT", "--c-chatgpt"),
     ("agent", "에이전트 위임", "--c-agent"),
     ("chrome", "웹 탐색", "--c-web"),
     ("git", "커밋", "--c-git"),
     ("other", "기타", "--c-other"),
 ]
 SERIES_KEYS = {k for k, _, _ in SERIES}
+AI_SOURCES = ("claude", "codex", "claude.ai", "chatgpt")  # places where the user talks to an AI
+TOOL_NAMES = {"claude": "Claude Code", "codex": "Codex", "claude.ai": "Claude 앱", "chatgpt": "ChatGPT"}
 WEEKDAYS = "월화수목금토일"
 
 
@@ -63,7 +67,7 @@ def series_key(e):
 # ---------------------------------------------------------------- numbers
 def day_stats(events):
     human = [e for e in events if e["actor"] == "human"]
-    prompts = [e for e in human if e["source"] in ("claude", "codex")]
+    prompts = [e for e in human if e["source"] in AI_SOURCES]
     commits = [e for e in events if e["source"] == "git"]
     add = sum(int(m) for e in commits for m in re.findall(r"\(\+(\d+)/", e["text"]))
     dele = sum(int(m) for e in commits for m in re.findall(r"/-(\d+)\)", e["text"]))
@@ -235,7 +239,7 @@ def week_chart(all_events, day):
     per = {d: Counter() for d in days}
     for e in all_events:
         d = e["ts"].date()
-        if d in per and (e["actor"] == "agent" or e["source"] in ("claude", "codex")):
+        if d in per and (e["actor"] == "agent" or e["source"] in AI_SOURCES):
             per[d][series_key(e)] += 1
     mx = max((sum(c.values()) for c in per.values()), default=0) or 1
     W, H, bw = 640, 110, 44
@@ -275,7 +279,7 @@ def esc(s):
 # ---------------------------------------------------------------- page
 CSS = """
 :root{--bg:#fff;--fg:#1f1f1f;--muted:#6b6b6b;--line:#e8e8e6;--soft:#f7f7f5;--chip:#f1f1ef;
---c-codex:#2f6fde;--c-claude:#d9773b;--c-agent:#8a63d2;--c-web:#b9b9b4;--c-git:#2e9d6a;--c-other:#d4b24c}
+--c-codex:#2f6fde;--c-claude:#d9773b;--c-claudeapp:#e8a878;--c-chatgpt:#3fa7a0;--c-agent:#8a63d2;--c-web:#b9b9b4;--c-git:#2e9d6a;--c-other:#d4b24c}
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#191919;--fg:#e9e9e7;--muted:#9b9b9b;--line:#2f2f2f;--soft:#202020;--chip:#2a2a2a;--c-web:#5a5a57}}
 :root[data-theme=dark]{--bg:#191919;--fg:#e9e9e7;--muted:#9b9b9b;--line:#2f2f2f;--soft:#202020;--chip:#2a2a2a;--c-web:#5a5a57}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.65 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard",sans-serif}
@@ -324,7 +328,7 @@ def render_page(day, stats, summary, all_events):
     if s.get("one_line"):
         parts.append(f'<div class="callout"><span>💡</span><div><b>한 줄 요약</b><br>{esc(s["one_line"])}</div></div>')
     parts.append(f"""<h2>📊 오늘의 숫자</h2><div class="kpis">
-<div class="kpi"><b>{stats['prompts']}</b><span>내가 AI에 준 지시<br>{' · '.join(f'{k.title()} {v}' for k, v in tool.most_common())}</span></div>
+<div class="kpi"><b>{stats['prompts']}</b><span>내가 AI에 준 지시<br>{' · '.join(f'{TOOL_NAMES.get(k, k)} {v}' for k, v in tool.most_common())}</span></div>
 <div class="kpi"><b>{stats['agent']}</b><span>에이전트 간 위임</span></div>
 <div class="kpi"><b>{stats['commits']}</b><span>커밋<br>+{stats['add']:,} / −{stats['dele']:,}줄</span></div>
 <div class="kpi"><b>{stats['web']}</b><span>웹 페이지 방문</span></div>
@@ -350,16 +354,17 @@ def render_page(day, stats, summary, all_events):
     if stats["people"]:
         rows = "".join(f'<tr><td>{esc(p)}</td><td class="num">{n}</td></tr>' for p, n in stats["people"])
         parts.append(f"<h2>👥 사람</h2><table><tr><th>누구</th><th class=\"num\">메시지</th></tr>{rows}</table>")
-    ai_rows = "".join(f'<tr><td>{k.title()}</td><td class="num">{v}</td></tr>' for k, v in tool.most_common())
+    ai_rows = "".join(f'<tr><td>{TOOL_NAMES.get(k, k)}</td><td class="num">{v}</td></tr>' for k, v in tool.most_common())
     if ai_rows:
         parts.append(f'<h2>🤖 AI 사용</h2><table><tr><th>도구</th><th class="num">내 지시</th></tr>{ai_rows}'
                      f'<tr><td>에이전트 간 위임</td><td class="num">{stats["agent"]}</td></tr></table>')
     if s.get("tomorrow"):
         parts.append('<h2>➡️ 내일로</h2><ul class="todo">' + "".join(f"<li>{esc(x)}</li>" for x in s["tomorrow"]) + "</ul>")
     parts.append('<h2>✍️ 회고 한 줄</h2><div class="q"><b>오늘 가장 의미 있었던 일은?</b><p>(직접 작성)</p></div>')
-    parts.append(f'<h2>📈 최근 7일</h2><div class="legend"><span class="lg"><i style="background:var(--c-codex)"></i>나 → Codex</span>'
-                 f'<span class="lg"><i style="background:var(--c-claude)"></i>나 → Claude</span>'
-                 f'<span class="lg"><i style="background:var(--c-agent)"></i>에이전트 위임</span></div>{week_chart(all_events, day)}')
+    week_legend = "".join(f'<span class="lg"><i style="background:var({v})"></i>{l}</span>'
+                          for k, l, v in SERIES if k in AI_SOURCES or k == "agent")
+    parts.append(f'<h2>📈 최근 7일</h2><div class="legend">{week_legend}</div>'
+                 f"{week_chart(all_events, day)}")
     note = "숫자는 로그에서 계산 · 요약은 Claude가 작성" if summary else "숫자만 표시 (--no-llm 또는 요약 실패)"
     parts.append(f'<p class="foot">{note}</p></main></body></html>')
     return "".join(parts)

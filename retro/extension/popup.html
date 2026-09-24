@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg:#fff; --fg:#1f1f1f; --muted:#6b6b6b; --line:#e8e8e6; --accent:#2f6fde; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#191919; --fg:#e9e9e7; --muted:#9b9b9b; --line:#2f2f2f; } }
+  body { margin:0; width:300px; background:var(--bg); color:var(--fg);
+         font:13px/1.5 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif; }
+  main { padding:14px 16px; }
+  h1 { font-size:15px; margin:0 0 2px; }
+  p.sub { color:var(--muted); margin:0 0 12px; font-size:12px; }
+  fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 10px; padding:8px 10px; }
+  legend { color:var(--muted); font-size:12px; padding:0 4px; }
+  label { display:block; margin:3px 0; }
+  button { width:100%; padding:8px; border:0; border-radius:6px; background:var(--accent); color:#fff;
+           font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.6; }
+  #status { margin-top:10px; color:var(--muted); font-size:12px; white-space:pre-line; }
+</style>
+</head>
+<body>
+<main>
+  <h1>retro</h1>
+  <p class="sub">오늘 기록을 이 컴퓨터의 다운로드/retro 폴더에 모읍니다. 외부 서버로 보내지 않습니다.</p>
+  <fieldset>
+    <legend>수집할 것</legend>
+    <label><input type="checkbox" data-source="chatgpt"> ChatGPT 대화</label>
+    <label><input type="checkbox" data-source="claude"> Claude 대화</label>
+    <label><input type="checkbox" data-source="history"> 방문 기록</label>
+  </fieldset>
+  <fieldset>
+    <legend>AI 대화 수집 범위</legend>
+    <label><input type="radio" name="mode" value="questions"> 제목 + 내 질문</label>
+    <label><input type="radio" name="mode" value="titles"> 제목만</label>
+  </fieldset>
+  <button id="run">지금 수집</button>
+  <div id="status"></div>
+</main>
+<script src="popup.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "retro — 하루 기록 수집",
+  "version": "0.1.0",
+  "description": "ChatGPT·Claude 대화 목록과 방문 기록을 내 컴퓨터의 retro 회고로 모읍니다. 외부 서버로 보내지 않습니다.",
+  "permissions": ["history", "storage", "alarms", "downloads"],
+  "host_permissions": ["https://chatgpt.com/*", "https://claude.ai/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "retro" }
+}

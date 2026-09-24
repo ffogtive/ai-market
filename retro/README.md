@@ -70,3 +70,15 @@ open retro_out/daily-2026-09-23.html
 - `--no-llm`: API 없이 숫자만. 요약 실패(인증, 한도, 거절) 시에도 숫자 페이지는 생성됨.
 - 라벨: `actor`(human / agent: `claude -p` 같은 헤드리스 실행), `source`, `project`, `host`.
 - 해당 날짜의 **내가 입력한 로그 원문이 Anthropic API로 전송됨**. 민감하면 `--no-llm`.
+
+## 브라우저 확장 (ChatGPT·Claude 대화 + 방문 기록)
+
+앱(데스크톱·모바일)에서 한 대화도 계정에 동기화되므로, PC 브라우저에 로그인만 되어 있으면 함께 수집됩니다.
+
+1. `chrome://extensions` → 우측 상단 **개발자 모드** 켜기
+2. **압축해제된 확장 프로그램 로드** → `~/.local/share/retro/retro/extension` 선택 (Finder에서 ⌘⇧. 로 숨김 폴더 표시)
+3. 툴바의 retro 아이콘 → **지금 수집** (이후 매시간 자동)
+
+- 저장 위치: `~/Downloads/retro/browser-날짜.jsonl` → `retro`가 자동으로 합침 (이 파일이 있으면 Chrome DB는 읽지 않아 권한 문제도 사라짐)
+- 수집 범위: 팝업에서 "제목 + 내 질문" / "제목만" 선택. 외부 서버 전송 없음
+- ChatGPT·Claude는 공식 기록 API가 없어 웹앱 내부 엔드포인트를 사용 → 서비스 변경 시 해당 항목만 "실패"로 표시되고 나머지는 계속 수집
