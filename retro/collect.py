@@ -70,9 +70,26 @@ def clip(text, n=200):
     return text if len(text) <= n else text[: n - 1] + "…"
 
 
+# Attached images arrive inside the prompt as <image name=[Image #1] path="/tmp/…/1-사진-1.jpg"> </image>.
+# The paths carry file names (personal photo names and the like) and eat the MAX_TEXT budget, cutting off the
+# instruction itself — so keep only how many there were.
+IMAGE_TAG_RE = re.compile(r"<image\b[^>]*>\s*(?:</image>)?", re.I)
+
+
+def strip_image_tags(text):
+    text, n = IMAGE_TAG_RE.subn(" ", text or "")
+    if not n:
+        return text
+    text = re.sub(r"\s+", " ", text).strip()
+    if text in ("[첨부]", "[첨부 파일]"):  # the tag was all there was
+        text = ""
+    return "%s [사진 %d장]" % (text, n) if text else "[사진 %d장]" % n
+
+
 def event(source, ts, text, project="", actor="human"):
     """actor: human (typed by the user) | agent (one AI instructing another) | auto (bots, jobs)."""
-    return {"source": source, "ts": ts, "project": project, "text": clip(text, MAX_TEXT), "actor": actor, "host": HOST}
+    return {"source": source, "ts": ts, "project": project, "text": clip(strip_image_tags(text), MAX_TEXT),
+            "actor": actor, "host": HOST}
 
 
 def read_jsonl(path):

@@ -78,7 +78,7 @@ def minutes(delta):
 INSTRUCT, QUESTION, APPROVE, FIX, PASTE, OTHER = "지시", "질문", "확인·승인", "수정·불만", "붙여넣기", "기타"
 CATEGORIES = (INSTRUCT, QUESTION, APPROVE, FIX, PASTE, OTHER)
 
-TAG_RE = re.compile(r"^\s*\[(음성|첨부|첨부 파일)\]\s*")  # added by collect.py
+TAG_RE = re.compile(r"^\s*\[(음성|첨부|첨부 파일)\]\s*|\s*\[사진 \d+장\]\s*")  # added by collect.py
 
 # terminal output: `user@host dir % cmd`, `user@host:~/dir$ cmd`, `$ git …`, stack traces, error lines.
 # The (?<!…) lookbehinds here and below only let a greedy run start where a token starts: same matches, but a long

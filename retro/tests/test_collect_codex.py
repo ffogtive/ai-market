@@ -332,6 +332,26 @@ class CodexTest(HomeTestCase):
         self.assertEqual(collect.strip_attachments("# Files mentioned by the user:\n\n## a.png: /x/a.png\n\n"
                                                    "## My request:\n   \n"), "[첨부 파일]")
 
+    def test_strip_image_tags(self):
+        """Attached images come inline as <image …path="/tmp/…/1-사진-1.jpg">; keep the count, drop the paths."""
+        t = collect.strip_image_tags(
+            '[첨부] 이걸로 적용해봐 <image name=[Image #1] path="/tmp/a/1-사진-1.jpg"> </image>'
+            ' <image name=[Image #2] path="/tmp/a/2-사진-2.jpg"> </image>')
+        self.assertEqual(t, "[첨부] 이걸로 적용해봐 [사진 2장]")
+        self.assertNotIn("/tmp/", t)
+
+    def test_strip_image_tags_only_images(self):
+        self.assertEqual(collect.strip_image_tags('[첨부] <image name=[Image #1] path="/tmp/a/x.jpg"> </image>'),
+                         "[사진 1장]")
+
+    def test_strip_image_tags_untouched(self):
+        self.assertEqual(collect.strip_image_tags("고쳐줘"), "고쳐줘")
+
+    def test_event_drops_image_paths(self):
+        """event() is the one place every source passes through, so the paths never reach a page or the LLM."""
+        e = collect.event("codex", "t", '보고 고쳐줘 <image name=[Image #1] path="/tmp/secret-사진.jpg"> </image>')
+        self.assertEqual(e["text"], "보고 고쳐줘 [사진 1장]")
+
     def test_strip_attachments_context_block(self):
         """The '# Context from my IDE setup' form uses the same header."""
         self.assertEqual(collect.strip_attachments("# Context from my IDE setup\n\nfile: a.py\n\n"
