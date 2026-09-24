@@ -95,16 +95,18 @@ LOG_MARK_RE = re.compile(  # one or two may be typed; three or more look like a 
     r"|(?<![\w./-])[\w./-]+\.(py|js|ts|tsx|jsx|go|rs|java|rb|sh|swift|kt):\d+|\bat [\w.$<>]+ \(|\bexit (code|status) \d+")
 PASTE_LINES = 5  # newlines, when a source keeps them
 
+# "아니"는 "아니면"(if not)·"아니라"(A가 아니라 B, not A but B)일 때는 거부·불만이 아니라 서술적 부정이다.
+# "말고"도 "-지 말고"(하지 말고 이어서 해)는 "하지 마" 연결어미이지 "이거 말고 저거"식 거부가 아니다.
 FIX_RE = re.compile(
-    r"아니(?!면)|왜\s*안|틀렸|틀린|틀려|말고|잘못|여전히|안\s*(돼|되네|되는데|되잖|됨|된다|먹|나와|보여|뜨)"
+    r"아니(?!면|라)|왜\s*안|틀렸|틀린|틀려|(?<!지)(?<!지\s)말고|잘못|여전히|안\s*(돼|되네|되는데|되잖|됨|된다|먹|나와|보여|뜨)"
     r"|(계속|또)\s*(에러|오류|안)"
     r"|^(no|nope|nah)\b|\b(wrong|incorrect|not working|still (broken|failing|fails))\b"
     r"|\b(doesn'?t|does not|didn'?t|did not) work|\bthat'?s not\b|\bnot what\b", re.I)
 # "다시 …" is often a plain request ("로그인 페이지 다시 설계하고 테스트 추가해줘"); with these it is a complaint
 AGAIN_RE = re.compile(r"다시")
-AGAIN_CUE_RE = re.compile(r"아니(?!면)|왜|안\s*돼|틀렸|말고|제대로")
+AGAIN_CUE_RE = re.compile(r"아니(?!면|라)|왜|안\s*돼|틀렸|(?<!지)(?<!지\s)말고|제대로")
 APPROVE_RE = re.compile(
-    r"^(응|어|네|넵|예|ㅇㅇ|ㅇㅋ|ㄱㄱ|y)(?![가-힣a-z])|오케이|좋아|좋습니다|좋네|좋다|그래(?![프픽])|머지|계속|진행|고고"
+    r"^(응|어|네|넵|예|ㅇㅇ|ㅇㅋ|ㄱㄱ|y)(?![가-힣a-z])|오케이|좋아|좋습니다|좋네|좋다|좋음|그래(?![프픽])|머지|계속|재개|진행|고고"
     r"|알겠|맞아|감사|고마워"
     r"|\b(yes|yep|yeah|ok|okay|sure|lgtm|go ahead|continue|proceed|merge|ship it|sounds good|looks good|do it)\b"
     r"|^go\b", re.I)
@@ -116,7 +118,7 @@ WORK_RE = re.compile(
     r"|\b(fix|add|make|create|implement|update|remove|delete|write|run|build|refactor|rename|change|move|deploy"
     r"|commit|push|install|generate|convert|replace|check|review|explain|summarize|translate|show|find|open"
     r"|set ?up|clean ?up)\b", re.I)
-REQUEST_RE = re.compile(r"해\s?줘|줘요?|주세요|해\s?봐|하자|합시다|해라|하세요|부탁|진행|\b(please|let'?s)\b", re.I)
+REQUEST_RE = re.compile(r"해\s?줘|줘요?|주세요|해\s?봐|해\s?놔|하자|합시다|해라|하세요|부탁|진행|\b(please|let'?s)\b", re.I)
 POLITE_RE = re.compile(r"줄래|줄\s?수|주실|주시겠|주겠|\b(can|could|would|will) you\b|\bplease\b", re.I)
 QUESTION_END_RE = re.compile(r"[?？][!.\s]*$")
 QUESTION_START_RE = re.compile(r"^(how|why|what|where|when|which|who|whose|is|are|was|were|does|did|should)\b", re.I)
@@ -147,11 +149,12 @@ def classify_prompt(text):
     1. 붙여넣기  terminal prompt / stack trace / error line / 3+ log marks / 5+ lines
     2. 수정·불만  아니·왜 안·틀렸·말고·안 돼 …, no/wrong/doesn't work (before approval: "아니 계속" is a fix);
                   "다시" only when the prompt is <= 30 chars or has one of those cues (see is_fix)
-    3. 확인·승인  <= 20 chars, an approval cue (응·ㅇㅇ·좋아·머지·계속·진행·ok·yes …), no work verb, no trailing "?"
+                  — "아니면"/"아니라"(A가 아니라 B)와 "-지 말고"(하지 말고 이어서)는 거부가 아니라 서술적 표현이라 제외
+    3. 확인·승인  <= 20 chars, an approval cue (응·ㅇㅇ·좋아·좋음·머지·계속·재개·진행·ok·yes …), no work verb, no trailing "?"
                   — so "PR 머지해줘" / "진행해줘" are approvals, "좋아 버튼 색 바꿔줘" is an instruction
     4. 질문       ends with "?" or starts with an English wh-/aux word
                   — unless it is a polite request ("해줄래?", "can you …?"), which is 지시
-    5. 지시       a work verb (만들·고쳐·추가 …, fix/add …) or a request ending (해줘·주세요·하자·진행, please)
+    5. 지시       a work verb (만들·고쳐·추가 …, fix/add …) or a request ending (해줘·해놔·주세요·하자·진행, please)
     6. 질문       a question word or ending anywhere (어떻게·왜·뭐 …, ~까/~나요, how/why/what)
     7. 기타
     """
