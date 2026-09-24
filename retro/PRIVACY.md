@@ -26,7 +26,7 @@
 |---|---|---|
 | Claude Code | `~/.claude/projects/*/*.jsonl` | 읽기 전용 |
 | Codex CLI | `~/.codex/sessions/**/*.jsonl`, `~/.codex/archived_sessions/*.jsonl`, `~/.codex/history.jsonl` | 읽기 전용. `auth.json`은 읽지 않음 |
-| git | 최근 30일 Claude Code·Codex 세션에 기록된 작업 폴더가 속한 레포에서 `git log` | 홈 폴더를 훑지 않음. 세션 파일은 첫 `cwd`까지만 읽음. 사용자가 `retro add-repo`로 지정한 폴더는 그 안만 탐색 |
+| git | 최근 30일 Claude Code·Codex 세션에 기록된 작업 폴더가 속한 레포에서 `git fetch`(그 레포의 원격에서 읽기만, 비밀번호 입력 없이) 후 `git log` | 홈 폴더를 훑지 않음. 세션 파일은 첫 `cwd`까지만 읽음. 사용자가 `retro add-repo`로 지정한 폴더는 그 안만 탐색 |
 | Chrome 방문 기록 | Chrome 프로필의 `History` 파일 **복사본** | 원본을 잠그지 않도록 임시 폴더에 복사해 읽고 지움 |
 | YouTube | 사용자가 지정한 Google Takeout 파일(`--youtube`) | 지정할 때만 |
 | 다른 기기 | `retro add-host`로 등록한 ssh 호스트에서 같은 수집기 실행 | 사용자의 ssh 키 사용, 비밀번호 저장 안 함 |
