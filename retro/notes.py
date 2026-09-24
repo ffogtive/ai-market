@@ -5,6 +5,8 @@
    "followup": {"first_task": "완료", "try": "이어가기"}, "updated": "2026-09-23T22:10:00"}
 
 followup: how this day's first task and Try went, checked on a later day (완료 / 이어가기 / 취소).
+When I never saved a first task for a day, its summary's AI draft (first_task_tomorrow in
+summary-daily-DAY.json beside the notes) is checked instead, marked as AI 제안.
 Only `retro app` writes these files (atomically); render.py reads them. They are never put in an
 LLM prompt. Standard library only.
 """
@@ -55,6 +57,31 @@ def kpt(notes):
 def text(notes, item):
     """This day's first task or Try as I wrote it ("" when not written)."""
     return kpt(notes)["try"] if item == "try" else str(notes.get("first_task") or "")
+
+
+def ai_first_task(notes_dir, day):
+    """The day's summary draft of tomorrow's first task (summary-daily-DAY.json beside the notes), or ""."""
+    if not notes_dir:
+        return ""
+    try:
+        with open(os.path.join(notes_dir, f"summary-daily-{day}.json"), encoding="utf-8") as f:
+            s = json.load(f).get("summary")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return clean(s.get("first_task_tomorrow"), 500) if isinstance(s, dict) else ""
+
+
+def with_ai_draft(notes_dir, day, notes):
+    """notes plus the AI draft as the first task when I never saved one (a saved empty one stays empty)."""
+    if "first_task" in notes:
+        return notes
+    draft = ai_first_task(notes_dir, day)
+    return dict(notes, first_task=draft, first_task_ai=True) if draft else notes
+
+
+def is_ai(notes, item):
+    """True when this item is the summary's draft, not something I saved."""
+    return item == "first_task" and bool(notes.get("first_task_ai"))
 
 
 def status(notes, item):
@@ -118,10 +145,13 @@ def set_status(notes_dir, day, item, value):
 
 
 def previous(notes_dir, day):
-    """(date, notes) of the last day before day (up to LOOKBACK days) whose notes have a first task or Try, else None."""
+    """(date, notes) of the last day before day (up to LOOKBACK days) with a first task or Try, else None.
+
+    A day I wrote no first task for still counts through its AI draft (see with_ai_draft).
+    """
     for i in range(1, LOOKBACK + 1):
         d = day - dt.timedelta(days=i)
-        n = load(notes_dir, "daily", d)
+        n = with_ai_draft(notes_dir, d, load(notes_dir, "daily", d))
         if text(n, "first_task") or text(n, "try"):
             return d, n
     return None
@@ -136,10 +166,10 @@ def carried(notes_dir, day):
 
 
 def week_tasks(notes_dir, days):
-    """[(day, first task, status or "")] for the days that have a first task in my notes."""
+    """[(day, first task, status or "", from AI)] for the days with a first task (mine, or else the AI draft)."""
     out = []
     for d in days:
-        n = load(notes_dir, "daily", d)
+        n = with_ai_draft(notes_dir, d, load(notes_dir, "daily", d))
         if text(n, "first_task"):
-            out.append((d, text(n, "first_task"), status(n, "first_task")))
+            out.append((d, text(n, "first_task"), status(n, "first_task"), is_ai(n, "first_task")))
     return out

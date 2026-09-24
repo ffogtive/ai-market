@@ -1125,13 +1125,17 @@ def followup_labels(day, prev_day):
     return {"first_task": f"{md_label(prev_day)}에 정한 첫 할 일", "try": f"{md_label(prev_day)}의 Try"}
 
 
+AI_MARK = ' <span class="sub">(AI 제안)</span>'  # a first task the summary drafted and I never saved
+
+
 def followup_callout(day, notes_dir):
     """↩️ the first task and Try of my last notes before day, and how they went (완료 / 이어가기 / 취소, set in retro app)."""
     prev = notes.previous(notes_dir, day)
     if not prev:
         return ""
     d, n = prev
-    rows = "".join(f'<br>{label}: {esc(notes.text(n, item))} <span class="chip">{notes.status(n, item) or notes.UNCHECKED}</span>'
+    rows = "".join(f'<br>{label}: {esc(notes.text(n, item))}{AI_MARK if notes.is_ai(n, item) else ""} '
+                   f'<span class="chip">{notes.status(n, item) or notes.UNCHECKED}</span>'
                    for item, label in followup_labels(day, d).items() if notes.text(n, item))
     return (f'<div class="callout"><span>↩️</span><div><b>지난 회고 확인</b>{rows}'
             f'<br><span class="sub">{NOTES_EDIT}</span></div></div>')
@@ -1151,11 +1155,13 @@ def week_tasks_section(days, notes_dir):
     tasks = notes.week_tasks(notes_dir, days)
     if not tasks:
         return ""
-    counts = Counter(st or notes.UNCHECKED for _, _, st in tasks)
+    counts = Counter(st or notes.UNCHECKED for _, _, st, _ in tasks)
     tally = " · ".join(f"{k} {counts[k]}" for k in notes.STATUSES + (notes.UNCHECKED,))
-    rows = "".join(f"<tr><td>{WEEKDAYS[d.weekday()]} {d:%m/%d}</td><td>{esc(t)}</td><td>{st or notes.UNCHECKED}</td></tr>"
-                   for d, t, st in tasks)
-    return (f'<h2>▶️ 이번 주 첫 할 일</h2><p class="sub">내가 정한 첫 할 일 {len(tasks)}개 · {tally}</p>'
+    n_ai = sum(1 for *_, ai in tasks if ai)
+    rows = "".join(f"<tr><td>{WEEKDAYS[d.weekday()]} {d:%m/%d}</td><td>{esc(t)}{AI_MARK if ai else ''}</td>"
+                   f"<td>{st or notes.UNCHECKED}</td></tr>" for d, t, st, ai in tasks)
+    source = f"정한 첫 할 일 {len(tasks)}개" + (f" (AI 제안 {n_ai}개 포함)" if n_ai else "")
+    return (f'<h2>▶️ 이번 주 첫 할 일</h2><p class="sub">{source} · {tally}</p>'
             f'<table><tr><th>정한 날</th><th>첫 할 일</th><th>다음 날 확인</th></tr>{rows}</table>'
             f'<p class="sub">{NOTES_EDIT}</p>')
 

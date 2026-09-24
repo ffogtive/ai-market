@@ -339,8 +339,9 @@ class NotesAppTest(AppTestCase):
         screen = self.get("/notes?date=2026-09-22")[2]
         self.assertIn("어제 정한 첫 할 일: 완료", screen)  # the flash
         self.assertIn('<button aria-pressed="true">완료</button>', screen)
-        # two days later (no notes on Tue): Mon is still the last one to look back to, with its date
-        self.assertIn("09/21 (월)에 정한 첫 할 일: 가격 첫 문단", self.page("daily-2026-09-23.html"))
+        # two days later: Tue has no notes, so its summary's AI draft is what Wed checks, marked as such
+        self.assertIn(f'어제 정한 첫 할 일: 가격 페이지 첫 문단 쓰기{render.AI_MARK} <span class="chip">{notes.UNCHECKED}</span>',
+                      self.page("daily-2026-09-23.html"))
 
     def test_continue_carries_into_todays_defaults(self):
         self.write(MON, **{"try": "테스트 먼저", "first_task": "가격 첫 문단"})
@@ -376,13 +377,30 @@ class NotesAppTest(AppTestCase):
         self.check(TUE, MON, "first_task", "완료")
         self.check(WED, TUE, "first_task", "이어가기")
         week = self.page("weekly-2026-09-21.html")
-        self.assertIn("내가 정한 첫 할 일 3개 · 완료 1 · 이어가기 1 · 취소 0 · 아직 확인 안 함 1", week)
+        self.assertIn("정한 첫 할 일 3개 · 완료 1 · 이어가기 1 · 취소 0 · 아직 확인 안 함 1", week)
+        self.assertNotIn("AI 제안", week)  # all three were saved by me
         self.assertIn("<td>월 09/21</td><td>A</td><td>완료</td>", week)
         self.assertIn("<td>화 09/22</td><td>B</td><td>이어가기</td>", week)
         self.assertIn("<td>수 09/23</td><td>C</td><td>아직 확인 안 함</td>", week)
         self.check(THU, WED, "first_task", "취소")  # Thursday has no page yet; the week's page still updates
         self.assertIn("완료 1 · 이어가기 1 · 취소 1 · 아직 확인 안 함 0", self.page("weekly-2026-09-21.html"))
         self.assertNotIn("%", MARKER.search(self.page("weekly-2026-09-21.html")).group(0))
+
+    def test_unsaved_days_are_checked_through_the_ai_draft(self):
+        # no notes at all: Tue's page and screen check Mon's AI draft; checking it keeps it an AI draft
+        tue = self.page("daily-2026-09-22.html")
+        self.assertIn(f"어제 정한 첫 할 일: 가격 페이지 첫 문단 쓰기{render.AI_MARK}", tue)
+        screen = self.get("/notes?date=2026-09-22")[2]
+        self.assertIn("가격 페이지 첫 문단 쓰기 <span class=\"muted\">(AI 제안 — 저장한 적 없음)</span>", screen)
+        self.check(TUE, MON, "first_task", "이어가기")
+        self.assertEqual(self.saved(MON), dict(self.saved(MON), followup={"first_task": "이어가기"}))
+        self.assertNotIn("first_task", self.saved(MON))  # the draft is never written as if I had saved it
+        self.assertEqual(notes.carried(self.out, TUE), {"first_task": "가격 페이지 첫 문단 쓰기"})
+        week = self.page("weekly-2026-09-21.html")
+        self.assertIn("정한 첫 할 일 3개 (AI 제안 3개 포함) · 완료 0 · 이어가기 1", week)
+        # a first task I saved empty on purpose stays empty: no AI draft for Mon any more
+        self.write(MON, first_task="")
+        self.assertNotIn("어제 정한 첫 할 일", self.page("daily-2026-09-22.html"))
 
     def test_weekly_notes(self):
         status, headers, _ = self.post("/notes", {"week": "2026-09-23", "keep": "주간 유지", "reflection": "출시"})
