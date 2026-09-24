@@ -156,6 +156,89 @@ class CodexTest(HomeTestCase):
         ])
         self.assertEqual([e["text"] for e in self.collect()], ["real prompt"])
 
+    def test_app_thread_without_user_events(self):
+        """Codex app threads seen on the user's Mac: user text only in response_item/message/user,
+        next to agent_message / inter-agent / tool records that are not prompts."""
+        self.write("rollout-l-app.jsonl", [
+            rec(100, "session_meta", meta("/work/shop", originator="Codex Desktop", history_mode="paginated"), 0),
+            rec(100, "response_item", {"type": "message", "role": "developer",
+                                       "content": [{"type": "input_text", "text": "<permissions instructions>"}]}, 1),
+            rec(100, "world_state", {"full": True, "state": {"environments": []}}, 2),
+            rec(100, "turn_context", {"cwd": "/work/shop"}, 3),
+            rec(100, "event_msg", {"type": "task_started", "turn_id": "turn-1"}, 4),
+            # injected blocks and the typed text in one message, tagged per block
+            rec(100, "response_item", dict(user_item(AGENTS_MD), content=[
+                {"type": "input_text", "text": AGENTS_MD}, {"type": "input_text", "text": ENV_CTX}],
+                internal_chat_message_metadata_passthrough={
+                    "content_item_kinds": ["agents_md.instructions", "environment.context"]}), 5),
+            rec(101, "response_item", dict(user_item("ship the pricing page"),
+                                           internal_chat_message_metadata_passthrough={
+                                               "content_item_kinds": ["user.text"]}), 6),
+            rec(101, "response_item", {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": "Also check mobile"},
+                {"type": "input_text", "text": "untagged injected block"}],
+                "internal_chat_message_metadata_passthrough": {
+                    "content_item_kinds": ["user.text", "additional_context.x"]}}, 7),
+            rec(102, "response_item", {"type": "agent_message", "author": "/root/worker", "recipient": "/root",
+                                       "content": [{"type": "input_text", "text": "worker finished"}]}, 8),
+            rec(102, "inter_agent_communication_metadata", {"trigger_turn": True}, 9),
+            rec(102, "inter_agent_communication", {"author": "/root", "recipient": "/root/worker",
+                                                   "content": "do the css", "trigger_turn": True}, 10),
+            rec(102, "response_item", {"type": "custom_tool_call", "name": "apply_patch", "input": "x"}, 11),
+            rec(102, "response_item", {"type": "function_call", "name": "shell", "arguments": "{}"}, 12),
+            rec(102, "response_item", user_item("<subagent_notification>done</subagent_notification>"), 13),
+            rec(103, "response_item", {"type": "message", "role": "assistant",
+                                       "content": [{"type": "output_text", "text": "Done."}]}, 14),
+            rec(103, "token_usage_record", {"total": 1}, 15),
+            rec(103, "event_msg", {"type": "task_complete"}, 16),
+        ])
+        got = self.collect()
+        self.assertEqual([(e["text"], e["project"], e["actor"]) for e in got],
+                         [("ship the pricing page", "shop", "human"), ("Also check mobile", "shop", "human")])
+
+    def test_inherited_user_message_is_skipped(self):
+        self.write("rollout-m.jsonl", [
+            rec(110, "session_meta", meta("/work/shop")),
+            dict(rec(110, "response_item", user_item("parent context copy")), metadata={"inherited_user_message": True}),
+            rec(111, "response_item", user_item("own prompt")),
+        ])
+        self.assertEqual([e["text"] for e in self.collect()], ["own prompt"])
+
+    def test_voice_transcript(self):
+        """Realtime (voice) turns: the user's words are realtime_item/transcript_segment; the agent
+        gets a <realtime_delegation> handoff, which is injected context."""
+        handoff = "<realtime_delegation>\n  <input>refactor the cart</input>\n</realtime_delegation>"
+        self.write("rollout-n-voice.jsonl", [
+            rec(120, "session_meta", meta("/work/shop", history_mode="paginated"), 0),
+            rec(120, "realtime_item", {"id": "r1", "realtime_session_id": "s1", "type": "realtime_session_started"}, 1),
+            rec(120, "realtime_item", {"id": "r2", "realtime_session_id": "s1", "type": "transcript_segment",
+                                       "role": "user", "text": "can you refactor the cart"}, 2),
+            rec(120, "realtime_item", {"id": "r3", "realtime_session_id": "s1", "type": "transcript_segment",
+                                       "role": "assistant", "text": "Sure, handing that off."}, 3),
+            rec(120, "realtime_item", {"id": "r4", "realtime_session_id": "s1", "type": "realtime_session_closed",
+                                       "outcome": "ended"}, 4),
+            rec(121, "event_msg", {"type": "task_started"}, 5),
+            rec(121, "response_item", user_item(ENV_CTX), 6),
+            rec(121, "response_item", user_item(handoff), 7),
+            rec(121, "event_msg", paginated_user(handoff), 8),
+            rec(122, "event_msg", {"type": "item_completed", "item": {"type": "AgentMessage", "id": "a1",
+                                                                     "content": [{"type": "Text", "text": "ok"}]}}, 9),
+        ])
+        got = self.collect()
+        self.assertEqual([e["text"] for e in got], ["[음성] can you refactor the cart"])
+
+    def test_mixed_user_events_and_model_input(self):
+        """Every prompt counts once whether it has a user event, only a response_item copy, or both
+        written across a minute boundary."""
+        self.write("rollout-o.jsonl", [
+            rec(130, "session_meta", meta("/work/shop", history_mode="paginated"), 0),
+            rec(130, "response_item", user_item("first"), 1, seconds=59.9),
+            rec(131, "event_msg", paginated_user("first"), 2, seconds=0.1),
+            rec(135, "response_item", user_item("second, model input only"), 3),
+        ])
+        got = self.collect()
+        self.assertEqual([e["text"] for e in got], ["first", "second, model input only"])
+
     def test_dedupe_across_files_and_history(self):
         self.write("rollout-e1.jsonl", [
             rec(40, "session_meta", meta("/work/shop")),
