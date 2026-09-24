@@ -29,7 +29,17 @@ SH
 chmod +x "$BIN/retro"
 "$UV" run --quiet "$DIR/retro/retro.py" --help >/dev/null  # pre-fetch Python + deps now, not on first use
 
+# put ~/.local/bin on PATH for future shells (zsh is the macOS default)
+case "${SHELL##*/}" in
+  zsh) RC="$HOME/.zshrc" ;;
+  bash) RC="$HOME/.bashrc"; [ "$(uname)" = Darwin ] && RC="$HOME/.bash_profile" ;;
+  *) RC="$HOME/.profile" ;;
+esac
+if ! grep -qs '.local/bin' "$RC"; then
+  printf '\n# added by retro installer\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$RC"
+fi
+
 echo "✓ 설치 완료: retro"
-case ":$PATH:" in *":$BIN:"*) ;; *) echo "  (새 터미널을 열거나: export PATH=\"$BIN:\$PATH\")";; esac
+case ":$PATH:" in *":$BIN:"*) ;; *) echo "  이 터미널에서 바로 쓰려면: source $RC  (새 터미널은 자동)";; esac
 echo "  retro                  오늘의 회고 페이지"
 echo "  retro add-host \"ssh -p 포트 user@서버\"   서버 기록도 함께 수집"
