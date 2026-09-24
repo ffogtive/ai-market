@@ -205,6 +205,87 @@ def collect_git(since, until, roots, max_depth, author):
     return out
 
 
+# ---------------------------------------------------------------- Chrome (local)
+CHROME_DIRS = [
+    "~/Library/Application Support/Google/Chrome",  # macOS
+    "~/.config/google-chrome",  # Linux
+]
+WEBKIT_EPOCH = dt.datetime(1601, 1, 1, tzinfo=dt.timezone.utc)
+
+
+def chrome_history_files():
+    for base in CHROME_DIRS:
+        base = os.path.expanduser(base)
+        for prof in ["Default"] + sorted(os.path.basename(p) for p in glob.glob(os.path.join(base, "Profile *"))):
+            path = os.path.join(base, prof, "History")
+            if os.path.isfile(path):
+                yield prof, path
+
+
+def collect_chrome(since, until):
+    import shutil
+    import sqlite3
+    import tempfile
+
+    out = []
+    lo = int((since - WEBKIT_EPOCH).total_seconds() * 1e6)
+    hi = int((until - WEBKIT_EPOCH).total_seconds() * 1e6)
+    for prof, path in chrome_history_files():
+        # Chrome keeps the DB locked while running; read a copy.
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = os.path.join(tmp, "History")
+            try:
+                shutil.copyfile(path, copy)
+                con = sqlite3.connect(copy)
+                rows = con.execute(
+                    "SELECT v.visit_time, u.title, u.url FROM visits v JOIN urls u ON u.id = v.url "
+                    "WHERE v.visit_time BETWEEN ? AND ? ORDER BY v.visit_time", (lo, hi)).fetchall()
+                con.close()
+            except (OSError, sqlite3.Error) as e:
+                print(f"[chrome] cannot read {path}: {e}", file=sys.stderr)
+                continue
+        last = None
+        for usec, title, url in rows:
+            host = re.sub(r"^https?://(www\.)?", "", url or "").split("/")[0]
+            label = title or url
+            if (host, label) == last:  # collapse reloads / redirects of the same page
+                continue
+            last = (host, label)
+            ts = (WEBKIT_EPOCH + dt.timedelta(microseconds=usec)).astimezone(LOCAL_TZ)
+            out.append(event("chrome", ts, label, host))
+    return out
+
+
+# ---------------------------------------------------------------- diagnostics
+def doctor(args, author):
+    def newest(paths):
+        paths = list(paths)
+        if not paths:
+            return "0 files"
+        m = max(os.path.getmtime(p) for p in paths)
+        return f"{len(paths)} files, newest {dt.datetime.fromtimestamp(m):%Y-%m-%d %H:%M}"
+
+    print(f"python   {sys.version.split()[0]}  home={os.path.expanduser('~')}  tz={LOCAL_TZ}")
+    claude_root = os.path.expanduser("~/.claude/projects")
+    print(f"claude   {claude_root} exists={os.path.isdir(claude_root)}  "
+          f"{newest(glob.glob(os.path.join(claude_root, '*', '*.jsonl')))}")
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        print(f"         note: CLAUDE_CONFIG_DIR={os.environ['CLAUDE_CONFIG_DIR']}")
+    codex_root = os.path.expanduser("~/.codex")
+    print(f"codex    {codex_root} exists={os.path.isdir(codex_root)}  "
+          f"{newest(glob.glob(os.path.join(codex_root, 'sessions', '**', '*.jsonl'), recursive=True))}  "
+          f"history.jsonl={os.path.isfile(os.path.join(codex_root, 'history.jsonl'))}")
+    repos = [r for root in (args.git_root or ["~"]) for r in find_repos(root, args.git_depth)]
+    print(f"git      {len(repos)} repos under {args.git_root or ['~']} (depth {args.git_depth}), author={author!r}")
+    for r in repos[:15]:
+        last = subprocess.run(["git", "-C", r, "log", "--all", "-1", "--pretty=%aI %ae"],
+                              capture_output=True, text=True).stdout.strip()
+        print(f"         {r}  last: {last}")
+    files = list(chrome_history_files())
+    print(f"chrome   {len(files)} profiles: {[p for p, _ in files]}")
+    print(f"youtube  {args.youtube or '(no --youtube given)'}")
+
+
 # ---------------------------------------------------------------- YouTube (Takeout)
 def collect_youtube(path, since, until):
     if not path:
@@ -320,6 +401,8 @@ def main():
                    help="author filter (default: global git user.email; pass '' for all authors)")
     p.add_argument("--youtube", help="path to Takeout watch-history.json or watch-history.html")
     p.add_argument("--out", default="retro_out")
+    p.add_argument("--no-chrome", action="store_true", help="skip local Chrome history")
+    p.add_argument("--doctor", action="store_true", help="show where each source looks and what it finds")
     args = p.parse_args()
 
     until = dt.datetime.now(LOCAL_TZ)
@@ -333,12 +416,17 @@ def main():
         except OSError:
             author = None
 
+    if args.doctor:
+        doctor(args, author)
+        return
+
     events = []
     for name, fn in [
         ("claude", lambda: collect_claude(since, until)),
         ("codex", lambda: collect_codex(since, until)),
         ("git", lambda: collect_git(since, until, args.git_root or ["~"], args.git_depth, author)),
         ("youtube", lambda: collect_youtube(args.youtube, since, until)),
+        ("chrome", lambda: [] if args.no_chrome else collect_chrome(since, until)),
     ]:
         got = fn()
         print(f"{name:8} {len(got):5} events", file=sys.stderr)

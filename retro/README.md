@@ -10,6 +10,12 @@ python3 retro/collect.py --days 7
 python3 retro/collect.py --days 7 --youtube ~/Downloads/Takeout/YouTube*/history/watch-history.json
 ```
 
+0건이 나오면 먼저 진단:
+
+```bash
+python3 retro/collect.py --doctor   # 각 출처를 어디서 찾는지, 파일이 몇 개인지 출력
+```
+
 결과: `retro_out/timeline.md` (날짜별 타임라인), `retro_out/events.jsonl`
 
 | 출처 | 읽는 위치 | 비고 |
@@ -17,6 +23,7 @@ python3 retro/collect.py --days 7 --youtube ~/Downloads/Takeout/YouTube*/history
 | Claude Code | `~/.claude/projects/*/*.jsonl` | 내가 입력한 프롬프트만 (시스템 메시지 제외) |
 | Codex | `~/.codex/sessions/**`, `~/.codex/history.jsonl` | 중복 제거 |
 | git | `--git-root`(기본 `~`) 아래 깊이 4까지의 레포 | 기본은 global `user.email` 커밋만. 전체는 `--git-author ''` |
+| Chrome | `~/Library/Application Support/Google/Chrome/*/History` | 로컬 방문 기록 (Takeout 불필요). 끄려면 `--no-chrome` |
 | YouTube | Takeout `watch-history.json`(권장) 또는 `.html` | 광고 시청 기록 제외 |
 
 ## YouTube 기록 받기
