@@ -8,6 +8,9 @@ retro                                              # 오늘의 회고 → ~/Retr
 retro add-host "ssh -p 10024 user@서버"            # 서버도 매번 함께 수집 (서버엔 아무것도 설치 안 함)
 retro --date 2026-09-23                            # 지난 날짜
 retro doctor                                       # 출처별 진단
+retro sources                                      # 무엇을 읽는지, 꺼진 소스
+retro off chrome / retro on chrome                 # 소스 끄기·켜기 (claude codex git chrome extension)
+retro add-repo ~/code                              # AI 세션 없이 커밋한 저장소도 수집 (저장소 또는 상위 폴더). 목록: retro repos, 빼기: retro remove-repo
 retro schedule --at 22:00                          # 매일 자동 실행 (맥), 끄기: retro unschedule
 retro update                                       # 최신 버전으로
 ```
@@ -41,7 +44,7 @@ python3 retro/collect.py --doctor   # 각 출처를 어디서 찾는지, 파일�
 |---|---|---|
 | Claude Code | `~/.claude/projects/*/*.jsonl` | 내가 입력한 프롬프트만 (시스템 메시지 제외) |
 | Codex | `~/.codex/sessions/**`, `~/.codex/history.jsonl` | 중복 제거 |
-| git | `--git-root`(기본 `~`) 아래 깊이 4까지의 레포 | 기본은 global `user.email` 커밋만. 전체는 `--git-author ''` |
+| git | 최근 30일 Claude Code·Codex 세션의 작업 폴더(`cwd`)가 속한 레포 | 홈 폴더를 훑지 않음. AI 없이 커밋한 저장소는 `retro add-repo DIR`로 추가(저장소 또는 상위 폴더, 깊이 4). 봇 커밋 제외, 작성자 제한은 `--git-author` |
 | Chrome | `~/Library/Application Support/Google/Chrome/*/History` | 로컬 방문 기록 (Takeout 불필요). 끄려면 `--no-chrome` |
 | YouTube | Takeout `watch-history.json`(권장) 또는 `.html` | 광고 시청 기록 제외 |
 

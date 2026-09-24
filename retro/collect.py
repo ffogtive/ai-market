@@ -4,7 +4,8 @@
 Sources (all read-only, all local):
   - Claude Code transcripts   ~/.claude/projects/*/*.jsonl
   - Codex CLI sessions        ~/.codex/sessions/**/*.jsonl, ~/.codex/history.jsonl
-  - git commits               repos found under --git-root (default: ~)
+  - git commits               repos the user opened a Claude Code / Codex session in
+                              (last 30 days); --git-root adds a directory scan
   - YouTube watch history     Google Takeout watch-history.json or .html (--youtube)
 
 Output (default ./retro_out):
@@ -213,37 +214,85 @@ def find_repos(root, max_depth):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
 
 
-def collect_git(since, until, roots, max_depth, author):
-    out = []
-    for root in roots:
-        for repo in find_repos(root, max_depth):
-            cmd = [
-                "git", "log", "--all", "--no-merges",
-                f"--since={int(since.timestamp())}", f"--until={int(until.timestamp())}",
-                "--pretty=format:%x1e%at %ae%x1f%s", "--shortstat",
-            ]
-            if author:
-                cmd.append(f"--author={author}")
-            try:
-                res = run(cmd, cwd=repo)
-            except (OSError, subprocess.TimeoutExpired):
+REPO_LOOKBACK_DAYS = 30
+
+
+def first_cwd(path):
+    for rec in read_jsonl(path):
+        payload = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
+        cwd = rec.get("cwd") or payload.get("cwd")
+        if cwd:
+            return cwd
+    return ""
+
+
+def session_repos(since):
+    """Repos the user actually worked in, from the cwd recorded in AI sessions.
+
+    Reads only known session files (and only up to their first cwd) instead of
+    crawling the home folder.
+    """
+    cutoff = (since - dt.timedelta(days=REPO_LOOKBACK_DAYS)).timestamp()
+    paths = glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl"))
+    paths += glob.glob(os.path.expanduser("~/.codex/sessions/**/*.jsonl"), recursive=True)
+    dirs = set()
+    for path in paths:
+        try:
+            if os.path.getmtime(path) < cutoff:
                 continue
-            for chunk in res.stdout.split("\x1e"):
-                if "[bot]" in chunk.split("\x1f")[0] or "github-actions" in chunk.split("\x1f")[0]:
-                    continue
-                if "\x1f" not in chunk:
-                    continue
-                head, _, stat = chunk.partition("\n")
-                meta, _, subject = head.partition("\x1f")
-                if re.match(r"(backup|auto|chore\(backup\))[:\s]", subject, re.I):
-                    continue
-                ts = parse_ts(int(meta.split(" ")[0])) if meta.split(" ")[0].isdigit() else None
-                if not ts:
-                    continue
-                stat = stat.strip()
-                m = re.findall(r"(\d+) (?:insertion|deletion)", stat)
-                suffix = f" (+{m[0]}/-{m[1]})" if len(m) == 2 else ""
-                out.append(event("git", ts, subject + suffix, os.path.basename(repo)))
+        except OSError:
+            continue
+        cwd = first_cwd(path)
+        if cwd and os.path.isdir(cwd):
+            dirs.add(cwd)
+    repos = set()
+    for d in dirs:
+        try:
+            top = run(["git", "rev-parse", "--show-toplevel"], cwd=d, timeout=10).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if top:
+            repos.add(top)
+    return repos
+
+
+def git_repos(since, roots, max_depth):
+    repos = session_repos(since)
+    for root in roots or []:
+        repos.update(find_repos(root, max_depth))
+    return sorted(repos)
+
+
+def collect_git(since, until, repos, author):
+    out = []
+    for repo in repos:
+        cmd = [
+            "git", "log", "--all", "--no-merges",
+            f"--since={int(since.timestamp())}", f"--until={int(until.timestamp())}",
+            "--pretty=format:%x1e%at %ae%x1f%s", "--shortstat",
+        ]
+        if author:
+            cmd.append(f"--author={author}")
+        try:
+            res = run(cmd, cwd=repo)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        for chunk in res.stdout.split("\x1e"):
+            if "[bot]" in chunk.split("\x1f")[0] or "github-actions" in chunk.split("\x1f")[0]:
+                continue
+            if "\x1f" not in chunk:
+                continue
+            head, _, stat = chunk.partition("\n")
+            meta, _, subject = head.partition("\x1f")
+            if re.match(r"(backup|auto|chore\(backup\))[:\s]", subject, re.I):
+                continue
+            ts = parse_ts(int(meta.split(" ")[0])) if meta.split(" ")[0].isdigit() else None
+            if not ts:
+                continue
+            stat = stat.strip()
+            m = re.findall(r"(\d+) (?:insertion|deletion)", stat)
+            suffix = f" (+{m[0]}/-{m[1]})" if len(m) == 2 else ""
+            out.append(event("git", ts, subject + suffix, os.path.basename(repo)))
     return out
 
 
@@ -317,8 +366,9 @@ def doctor(args, author):
     print(f"codex    {codex_root} exists={os.path.isdir(codex_root)}  "
           f"{newest(glob.glob(os.path.join(codex_root, 'sessions', '**', '*.jsonl'), recursive=True))}  "
           f"history.jsonl={os.path.isfile(os.path.join(codex_root, 'history.jsonl'))}")
-    repos = [r for root in (args.git_root or ["~"]) for r in find_repos(root, args.git_depth)]
-    print(f"git      {len(repos)} repos under {args.git_root or ['~']} (depth {args.git_depth}), author={author!r}")
+    repos = git_repos(dt.datetime.now(LOCAL_TZ), args.git_root, args.git_depth)
+    scan = f" + scan of {args.git_root} (depth {args.git_depth})" if args.git_root else ""
+    print(f"git      {len(repos)} repos: AI sessions (last {REPO_LOOKBACK_DAYS} days){scan}, author={author!r}")
     for r in repos[:15]:
         out = run(["git", "log", "--all", "-1", "--pretty=%at %ae"], cwd=r).stdout.split()
         last = f"{parse_ts(int(out[0])):%Y-%m-%d %H:%M} {out[1]}" if out and out[0].isdigit() else ""
@@ -485,16 +535,21 @@ def write_outputs(events, out_dir, to_stdout=False):
         f.write(timeline)
 
 
+SOURCES = ("claude", "codex", "git", "youtube", "chrome")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--days", type=int, default=7, help="look back N days (default 7)")
-    p.add_argument("--git-root", action="append", help="directory to scan for repos (repeatable, default ~)")
+    p.add_argument("--git-root", action="append",
+                   help="also scan this directory for repos (repeatable; default: no scan, only repos from AI sessions)")
     p.add_argument("--git-depth", type=int, default=4, help="max directory depth for repo scan")
     p.add_argument("--git-author", default=None,
                    help="only commits whose author matches (default: all authors except bots)")
     p.add_argument("--youtube", help="path to Takeout watch-history.json or watch-history.html")
     p.add_argument("--out", default="retro_out")
-    p.add_argument("--no-chrome", action="store_true", help="skip local Chrome history")
+    p.add_argument("--no-chrome", action="store_true", help="skip local Chrome history (same as --skip chrome)")
+    p.add_argument("--skip", action="append", default=[], choices=SOURCES, help="turn a source off (repeatable)")
     p.add_argument("--stdout", action="store_true", help="print events as JSONL to stdout instead of files (for ssh)")
     p.add_argument("--doctor", action="store_true", help="show where each source looks and what it finds")
     args = p.parse_args()
@@ -508,15 +563,16 @@ def main():
         doctor(args, author)
         return
 
+    skip = set(args.skip) | ({"chrome"} if args.no_chrome else set())
     events = []
     for name, fn in [
         ("claude", lambda: collect_claude(since, until)),
         ("codex", lambda: collect_codex(since, until)),
-        ("git", lambda: collect_git(since, until, args.git_root or ["~"], args.git_depth, author)),
+        ("git", lambda: collect_git(since, until, git_repos(since, args.git_root, args.git_depth), author)),
         ("youtube", lambda: collect_youtube(args.youtube, since, until)),
-        ("chrome", lambda: [] if args.no_chrome else collect_chrome(since, until)),
+        ("chrome", lambda: collect_chrome(since, until)),
     ]:
-        got = fn()
+        got = [] if name in skip else fn()
         print(f"{name:8} {len(got):5} events", file=sys.stderr)
         events += got
 

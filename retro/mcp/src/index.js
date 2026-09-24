@@ -57,6 +57,21 @@ const TOOLS = [
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
+  {
+    name: "forget",
+    title: "Delete from retro",
+    description: "Delete the user's logs. Only when the user asks.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: { type: "string", enum: ["last", "day", "all"] },
+        date: { type: "string", description: "YYYY-MM-DD, default today" },
+      },
+      required: ["scope"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
 ];
 
 // ---------------------------------------------------------------- helpers
@@ -93,6 +108,32 @@ export function summarize(entries) {
   return { byApp, byKind, decisions: entries.flatMap((e) => e.decisions || []) };
 }
 
+async function forget(env, key, scope, date) {
+  if (scope === "last") {
+    const day = await readDay(env, key, date);
+    if (!day.length) return 0;
+    day.pop();
+    if (day.length) await env.RETRO.put(`log:${key}:${date}`, JSON.stringify(day), { expirationTtl: 60 * 60 * 24 * 400 });
+    else await env.RETRO.delete(`log:${key}:${date}`);
+    return 1;
+  }
+  if (scope === "day") {
+    const n = (await readDay(env, key, date)).length;
+    await env.RETRO.delete(`log:${key}:${date}`);
+    return n;
+  }
+  let n = 0, cursor;
+  do {
+    const page = await env.RETRO.list({ prefix: `log:${key}:`, cursor });
+    for (const k of page.keys) {
+      n += (await env.RETRO.get(k.name, "json") || []).length;
+      await env.RETRO.delete(k.name);
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  return n;
+}
+
 // ---------------------------------------------------------------- tools
 async function callTool(name, args, ctx) {
   if (name === "log_activity") {
@@ -121,6 +162,12 @@ async function callTool(name, args, ctx) {
       `page: ${url}`,
     ];
     return text(lines.join("\n"));
+  }
+  if (name === "forget") {
+    if (!["last", "day", "all"].includes(args.scope)) throw rpcError(-32602, "scope must be last, day, or all");
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(args.date || "") ? args.date : localDate();
+    const n = await forget(ctx.env, ctx.key, args.scope, date);
+    return text(`deleted ${n} ${args.scope === "all" ? "(all dates)" : `(${date})`}`);
   }
   throw rpcError(-32602, `unknown tool: ${name}`);
 }
@@ -226,6 +273,7 @@ ${entries.length ? `<div class="kpis"><div class="kpi"><b>${entries.length}</b><
 ${kinds.length ? `<h2>🧭 활동 유형</h2><div class="mix">${mix}</div><div class="legend">${mixLegend}</div>` : ""}
 <h2>✅ 한 일</h2><table><tr><th>시간</th><th>AI</th><th>주제</th><th>결과</th></tr>${rows}</table>
 ${decisions ? `<h2>📌 결정한 것</h2><ul>${decisions}</ul>` : ""}` : `<p class="empty">아직 기록이 없습니다. AI와 대화를 마치면 자동으로 기록됩니다.</p>`}
+<p class="empty" style="margin-top:40px;font-size:12.5px">지우려면 AI에게 "retro 기록 지워줘"(방금 것 / 오늘 / 전부)라고 말하세요.</p>
 </main></body></html>`;
 }
 
