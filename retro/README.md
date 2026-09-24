@@ -1,5 +1,23 @@
 # retro — 로컬 활동 로그 수집기 + 일간 회고 페이지
 
+## 설치 (한 줄, Python 설정 불필요)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ffogtive/ai-market/claude/eloquent-brahmagupta-2mkg25/retro/install.sh | sh
+retro                                              # 오늘의 회고 → ~/Retro/daily-날짜.html 자동으로 열림
+retro add-host "ssh -p 10024 user@서버"            # 서버도 매번 함께 수집 (서버엔 아무것도 설치 안 함)
+retro --date 2026-09-23                            # 지난 날짜
+retro doctor                                       # 출처별 진단
+retro update                                       # 최신 버전으로
+```
+
+- Python: uv가 3.12를 따로 받아 씀 → 맥의 Python 3.9, 서버의 3.6 무관
+- 요약: `ANTHROPIC_API_KEY`가 있으면 API, 없으면 설치된 **Claude Code(`claude -p`)**로 → API 키 불필요. 둘 다 없으면 숫자만
+- `--llm none`: 로그 원문을 외부로 보내지 않음
+
+---
+
+
 가설: Claude Code 대화, Codex 대화, git 커밋, YouTube 시청 기록을 합치면 "무엇을 만들었나"까지 하루가 복원된다.
 
 ## 실행 (맥)

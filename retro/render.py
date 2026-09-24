@@ -17,7 +17,10 @@ import inspect
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from collections import Counter, defaultdict
 
 MODEL = "claude-opus-5"
@@ -126,9 +129,18 @@ SYSTEM = """당신은 사용자의 하루 활동 로그를 읽고 일간 회고�
 - 로그에 없는 사실을 만들지 마세요. 짧고 구체적인 한국어로 쓰세요."""
 
 
-def summarize(day, events, stats):
-    import anthropic
+def pick_backend(choice):
+    """auto: API key → Claude Code CLI (uses the user's own subscription) → none."""
+    if choice != "auto":
+        return None if choice == "none" else choice
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+        return "api"
+    if shutil.which("claude"):
+        return "claude"
+    return None
 
+
+def build_prompt(day, events, stats):
     lines = []
     for e in events:
         if e["actor"] != "human":
@@ -137,6 +149,29 @@ def summarize(day, events, stats):
         lines.append(f"{e['ts']:%H:%M} {e['source']} {proj}{e['text']}")
     facts = (f"날짜: {day}\n직접 입력한 AI 지시 {stats['prompts']}건, 에이전트 간 지시 {stats['agent']}건, "
              f"커밋 {stats['commits']}건(+{stats['add']}/-{stats['dele']}), 웹 방문 {stats['web']}건")
+    return f"{facts}\n\n<log>\n" + "\n".join(lines) + "\n</log>"
+
+
+def summarize_cli(day, events, stats):
+    """Headless Claude Code: no API key needed, no tools, nothing saved as a session."""
+    with tempfile.TemporaryDirectory() as cwd:  # keep project CLAUDE.md files out of the prompt
+        res = subprocess.run(
+            ["claude", "-p", SYSTEM + "\n\n표준 입력의 로그로 일간 회고를 작성하세요.",
+             "--output-format", "json", "--json-schema", json.dumps(SUMMARY_SCHEMA),
+             "--tools", "", "--no-session-persistence"],
+            input=build_prompt(day, events, stats), capture_output=True, text=True, cwd=cwd, timeout=900)
+    try:
+        out = json.loads(res.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"claude CLI failed: {(res.stderr or res.stdout).strip()[:300]}")
+    if out.get("is_error") or not out.get("structured_output"):
+        raise RuntimeError(f"claude CLI returned no summary: {str(out.get('result'))[:300]}")
+    return out["structured_output"]
+
+
+def summarize(day, events, stats):
+    import anthropic
+
     client = anthropic.Anthropic()
     create = client.beta.messages.create
     params = dict(
@@ -147,7 +182,7 @@ def summarize(day, events, stats):
         fallbacks="default",
         system=SYSTEM,
         output_config={"format": {"type": "json_schema", "schema": SUMMARY_SCHEMA}},
-        messages=[{"role": "user", "content": f"{facts}\n\n<log>\n" + "\n".join(lines) + "\n</log>"}],
+        messages=[{"role": "user", "content": build_prompt(day, events, stats)}],
     )
     # Python 3.9 only gets the 0.x SDK, which may not know newer request fields; send those raw.
     known = inspect.signature(create).parameters
@@ -330,23 +365,32 @@ def render_page(day, stats, summary, all_events):
     return "".join(parts)
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("events", nargs="+", help="events.jsonl files (one per machine)")
     p.add_argument("--date", help="YYYY-MM-DD (default: today)")
-    p.add_argument("--no-llm", action="store_true", help="skip the Claude summary")
+    p.add_argument("--llm", default="auto", choices=["auto", "api", "claude", "none"],
+                   help="summary backend (auto: API key → claude CLI → numbers only)")
+    p.add_argument("--no-llm", action="store_true", help="same as --llm none")
     p.add_argument("--out", help="output HTML path (default: retro_out/daily-DATE.html)")
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     all_events = load(args.events)
     day = dt.date.fromisoformat(args.date) if args.date else dt.date.today()
     events = [e for e in all_events if e["ts"].date() == day]
     if not events:
-        sys.exit(f"no events on {day}")
+        print(f"no events on {day}", file=sys.stderr)
+        return 1
     stats = day_stats(events)
 
     summary = None
-    if not args.no_llm:
+    backend = None if args.no_llm else pick_backend(args.llm)
+    if backend == "claude":
+        try:
+            summary = summarize_cli(day, events, stats)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as e:
+            print(f"summary failed ({e}) — rendering numbers only", file=sys.stderr)
+    elif backend == "api":
         try:
             import anthropic
         except ImportError:
@@ -366,13 +410,15 @@ def main():
                 print(f"API error {e.status_code}: {e.message}", file=sys.stderr)
             except (RuntimeError, ValueError) as e:  # refusal / truncation / bad JSON
                 print(f"summary unusable: {e}", file=sys.stderr)
+    print(f"· 요약: {backend or '없음 (숫자만)'}{'' if summary or not backend else ' 실패'}", file=sys.stderr)
 
     out = args.out or os.path.join("retro_out", f"daily-{day}.html")
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         f.write(render_page(day, stats, summary, all_events))
     print(f"wrote {out}", file=sys.stderr)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
