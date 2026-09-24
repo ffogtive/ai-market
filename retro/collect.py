@@ -181,10 +181,20 @@ def codex_actor(meta):
     return "human"
 
 
+def codex_user_text(payload):
+    """Text of a response_item user message without the context blocks Codex injects."""
+    content = payload.get("content")
+    kinds = (payload.get("internal_chat_message_metadata_passthrough") or {}).get("content_item_kinds")
+    if isinstance(content, list) and isinstance(kinds, list) and len(kinds) == len(content):
+        # newer Codex tags each block: user.text / user.image vs agents_md.instructions, ...
+        content = [c for c, k in zip(content, kinds) if str(k).startswith("user.")]
+    return text_of(content)
+
+
 def codex_prompts(path):
-    """(meta, [(ts, text, cwd)]) for the prompts in one rollout file."""
+    """(meta, [(ts, text, cwd)]) for the prompts in one rollout file, injected context removed."""
     meta, cwd, file_ts = {}, "", None  # older formats only timestamp the first line
-    typed, raw = [], []
+    found = []  # (ts, text, cwd, is_user_event)
     for rec in read_jsonl(path):
         pl = rec.get("payload") if isinstance(rec.get("payload"), dict) else None
         payload = rec if pl is None else pl  # oldest format: bare records, no envelope
@@ -200,14 +210,33 @@ def codex_prompts(path):
             continue
         ts = parse_ts(rec.get("timestamp") or payload.get("timestamp")) or file_ts
         item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+        text, is_event = None, True
         if kind == "event_msg" and ptype == "user_message":  # legacy history mode
-            typed.append((ts, payload.get("message", ""), cwd))
+            text = payload.get("message", "")
         elif kind == "event_msg" and ptype == "item_completed" and item.get("type") == "UserMessage":  # paginated
-            typed.append((ts, text_of(item.get("content")), cwd))
+            text = text_of(item.get("content"))
+        elif kind == "realtime_item" and ptype == "transcript_segment" and payload.get("role") == "user":
+            text = payload.get("text", "")
+            text = ("[음성] " + text) if text.strip() else ""
         elif ptype == "message" and payload.get("role") == "user":
-            raw.append((ts, text_of(payload.get("content")), cwd))
-    # model-input copies also carry injected context; use them only when a file has no user events
-    return meta, (typed or raw)
+            # model input; the only copy of a prompt when no user event was written
+            if (rec.get("metadata") or {}).get("inherited_user_message"):
+                continue
+            text, is_event = codex_user_text(payload), False
+        if text is None:
+            continue
+        text = strip_attachments(text)
+        if is_noise(text) or text.lstrip().startswith(CODEX_NOISE_PREFIXES):
+            continue
+        found.append((ts, text, cwd, is_event))
+    events = [(ts, text) for ts, text, _, is_event in found if is_event and ts]
+    out = []
+    for ts, text, cwd, is_event in found:
+        # the model-input copy of a prompt sits right next to its user event
+        if not is_event and ts and any(t == text and abs((ts - ets).total_seconds()) < 60 for ets, t in events):
+            continue
+        out.append((ts, text, cwd))
+    return meta, out
 
 
 def collect_codex(since, until):
@@ -226,9 +255,6 @@ def collect_codex(since, until):
         # a fork re-writes the parent's prompts with the fork's own timestamps
         inherited = set(texts) if (meta.get("forked_from_id") or meta.get("parent_thread_id")) else set()
         for ts, text, cwd in prompts:
-            text = strip_attachments(text)
-            if is_noise(text) or text.lstrip().startswith(CODEX_NOISE_PREFIXES):
-                continue
             if not ts or not (since <= ts < until):
                 continue
             key = (ts.isoformat()[:16], clip(text, 60))
