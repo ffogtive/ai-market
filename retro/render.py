@@ -17,11 +17,17 @@ summary is one call per day, and its "한 일" rows are split by their time.
 
 The summary is saved next to the page (summary-daily-DATE.json /
 summary-weekly-MONDAY.json) and reused while the logs stay the same, so a
-re-render costs no LLM call; --refresh summarizes again anyway. --preview prints
+re-render costs no LLM call; --refresh summarizes again anyway; --llm cached
+never calls it (the saved summary, or numbers only). --preview prints
 the exact text a summary would send (and to which backend) and stops: no call,
 no page, no cache file. Each run also
 rewrites index.html (every page, newest first) and the ← · → rows at the top
 of the pages in that folder.
+
+My own notes (notes-DATE.json in the same folder, written by `retro app`: KPT,
+가장 의미 있었던 일, 내일 첫 할 일, the next day's 완료/이어가기/취소) fill the
+"(직접 작성)" slots. They sit between <!--notes:…--> markers, so refresh_notes()
+rewrites just those parts after a save — no logs, no LLM. Notes never go into a prompt.
 
 Needs: pip install anthropic, and ANTHROPIC_API_KEY (or `ant auth login`).
 """
@@ -41,6 +47,7 @@ from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import analyze  # noqa: E402
+import notes  # noqa: E402
 
 MODEL = "claude-opus-5"
 ACTIVITY_TYPES = ["기획", "제작", "QA·검수", "개발", "리서치", "소통", "행정", "개인"]
@@ -580,7 +587,10 @@ def cached_summary(choice, prompt, system, schema, task, path, refresh=False, nu
     the older summary is shown instead of numbers only — then stale is when it was
     made ("09/24 18:02") and both the footer and the summary box say so.
     numbers: a few counts saved alongside, for index.html.
+    choice "cached": never summarize (no network) — the saved summary, marked stale when the logs changed since.
     """
+    if choice == "cached":
+        return saved_only(prompt, system, schema, path)
     if choice == "none" or not path:
         return get_summary(choice, prompt, system, schema, task), "", ""
     digest = prompt_hash(prompt, system, schema)
@@ -626,6 +636,19 @@ def preview_text(what, prompt, system, schema, task, choice, path, refresh=False
                     " (--refresh면 다시 보냄).")
     return "\n".join(head + ["", "---- 고정 지시문 (retro가 붙이는 문구, 내 기록 아님) ----", fixed,
                              "", "---- 보낼 기록 ----", prompt])
+
+
+def saved_only(prompt, system, schema, path):
+    """--llm cached: the saved summary without any LLM call; numbers only when there is none."""
+    global LAST_FAILURE
+    saved = read_cache(path) if path else None
+    if not saved:
+        LAST_FAILURE = "저장된 요약 없음 (--llm cached: 요약을 새로 받지 않음)"
+        return None, "", ""
+    print("· 요약: 저장된 요약 사용 (--llm cached)", file=sys.stderr)
+    if saved.get("prompt_sha256") == prompt_hash(prompt, system, schema):
+        return saved["summary"], f"요약은 Claude가 작성 ({made_at(saved)}에 만든 요약 재사용)", ""
+    return saved["summary"], f"저장된 요약 표시 — {made_at(saved)}에 만든 요약이라 그 뒤 로그는 빠져 있을 수 있습니다.", made_at(saved)
 
 
 def saved_dailies(days, by_day, stats, cache_dir):
@@ -1056,23 +1079,137 @@ def decisions_blockers(s, b, blockers_head="🚧 막힌 것 · 리스크", clock
     return out
 
 
-def next_section(s, key="tomorrow", head="➡️ 내일로"):
-    """➡️ 내일로 (내일 첫 할 일 on top) — or 다음 주로 on the weekly page."""
-    first, items = s.get("first_task_tomorrow"), s.get(key) or []
+def next_section(s, key="tomorrow", head="➡️ 내일로", mine=""):
+    """➡️ 내일로 (내일 첫 할 일 on top) — or 다음 주로 on the weekly page. mine: the first task I saved (wins over the draft)."""
+    first, items = mine or s.get("first_task_tomorrow"), s.get(key) or []
     if not first and not items:
         return ""
     out = f"<h2>{head}</h2>"
     if first:
-        out += f'<div class="callout"><span>▶️</span><div><b>내일 첫 할 일</b><br>{esc(first)}</div></div>'
+        who = ' <span class="sub">내가 정함</span>' if mine else ""
+        out += f'<div class="callout"><span>▶️</span><div><b>내일 첫 할 일</b>{who}<br>{esc(first)}</div></div>'
     return out + ('<ul class="todo">' + "".join(f"<li>{esc(x)}</li>" for x in items) + "</ul>" if items else "")
 
 
-def kpt_section(kpt, head="✍️ KPT"):
-    """Keep / Problem / Try: the LLM's draft beside an empty column to write in."""
-    kpt = kpt if isinstance(kpt, dict) else {}
-    rows = "".join(f'<tr><th>{label}</th><td>{esc(kpt.get(k) or "–")}</td><td class="write">(직접 작성)</td></tr>'
+def kpt_section(kpt, head="✍️ KPT", mine=None):
+    """Keep / Problem / Try: the LLM's draft beside my own column — "(직접 작성)" until I write it in retro app."""
+    kpt, mine = (kpt if isinstance(kpt, dict) else {}), mine or {}
+    rows = "".join(f'<tr><th>{label}</th><td>{esc(kpt.get(k) or "–")}</td>'
+                   + (f"<td>{multiline(mine[k])}</td>" if mine.get(k) else '<td class="write">(직접 작성)</td>') + "</tr>"
                    for k, label in (("keep", "Keep"), ("problem", "Problem"), ("try", "Try")))
     return f'<h2>{head}</h2><table><tr><th></th><th>AI 초안</th><th>내 생각</th></tr>{rows}</table>'
+
+
+# ---------------------------------------------------------------- my notes (notes.py), rewritten in place after a save
+NOTES_EDIT = "수정은 retro app에서"
+NOTE_RE = re.compile(r"<!--notes:(\w+)( ai)?-->.*?<!--/notes:\1-->", re.S)
+
+
+def note_block(name, body, ai):
+    """A part built from my notes, between markers refresh_notes() finds; ai: the page was made with a summary."""
+    return f"<!--notes:{name}{' ai' if ai else ''}-->{body}<!--/notes:{name}-->"
+
+
+def multiline(text):
+    return esc(text).replace("\n", "<br>")
+
+
+def md_label(d):
+    return f"{d:%m/%d} ({WEEKDAYS[d.weekday()]})"
+
+
+def followup_labels(day, prev_day):
+    """{item: label} — "어제 정한 첫 할 일" / "어제의 Try", or with the date when the last notes are older."""
+    if prev_day == day - dt.timedelta(days=1):
+        return {"first_task": "어제 정한 첫 할 일", "try": "어제의 Try"}
+    return {"first_task": f"{md_label(prev_day)}에 정한 첫 할 일", "try": f"{md_label(prev_day)}의 Try"}
+
+
+def followup_callout(day, notes_dir):
+    """↩️ the first task and Try of my last notes before day, and how they went (완료 / 이어가기 / 취소, set in retro app)."""
+    prev = notes.previous(notes_dir, day)
+    if not prev:
+        return ""
+    d, n = prev
+    rows = "".join(f'<br>{label}: {esc(notes.text(n, item))} <span class="chip">{notes.status(n, item) or notes.UNCHECKED}</span>'
+                   for item, label in followup_labels(day, d).items() if notes.text(n, item))
+    return (f'<div class="callout"><span>↩️</span><div><b>지난 회고 확인</b>{rows}'
+            f'<br><span class="sub">{NOTES_EDIT}</span></div></div>')
+
+
+def my_kpt(s, n, head, reflection_label):
+    """✍️ KPT with my column from my notes, then what I wrote as the most meaningful thing."""
+    out = kpt_section(s.get("kpt"), head, notes.kpt(n))
+    if n.get("reflection"):
+        out += (f'<div class="callout"><span>🌱</span><div><b>{reflection_label}</b><br>'
+                f'{multiline(n["reflection"])}</div></div>')
+    return out + (f'<p class="sub">{NOTES_EDIT}</p>' if notes.has_any(n) else "")
+
+
+def week_tasks_section(days, notes_dir):
+    """▶️ the first tasks I set on each day of the week and how the next day went — counts, no score."""
+    tasks = notes.week_tasks(notes_dir, days)
+    if not tasks:
+        return ""
+    counts = Counter(st or notes.UNCHECKED for _, _, st in tasks)
+    tally = " · ".join(f"{k} {counts[k]}" for k in notes.STATUSES + (notes.UNCHECKED,))
+    rows = "".join(f"<tr><td>{WEEKDAYS[d.weekday()]} {d:%m/%d}</td><td>{esc(t)}</td><td>{st or notes.UNCHECKED}</td></tr>"
+                   for d, t, st in tasks)
+    return (f'<h2>▶️ 이번 주 첫 할 일</h2><p class="sub">내가 정한 첫 할 일 {len(tasks)}개 · {tally}</p>'
+            f'<table><tr><th>정한 날</th><th>첫 할 일</th><th>다음 날 확인</th></tr>{rows}</table>'
+            f'<p class="sub">{NOTES_EDIT}</p>')
+
+
+def daily_notes(day, summary, notes_dir):
+    """{name: marked html} of the daily page's parts that show my notes (전체 tab)."""
+    s, n, ai = summary or {}, notes.load(notes_dir, "daily", day), bool(summary)
+    return {"followup": note_block("followup", followup_callout(day, notes_dir), ai),
+            "next": note_block("next", next_section(s, mine=notes.text(n, "first_task")), ai),
+            "kpt": note_block("kpt", my_kpt(s, n, "✍️ KPT", "오늘 가장 의미 있었던 일"), ai)}
+
+
+def weekly_notes(days, summary, notes_dir):
+    s, n, ai = summary or {}, notes.load(notes_dir, "weekly", days[0]), bool(summary)
+    return {"tasks": note_block("tasks", week_tasks_section(days, notes_dir), ai),
+            "kpt": note_block("kpt", my_kpt(s, n, "✍️ 주간 KPT", "이번 주 가장 의미 있었던 일"), ai)}
+
+
+def patch_notes(page_path, blocks_for):
+    """Rewrite the marked parts of one page; blocks_for(page had a summary) → {name: html}. False: no page or no markers."""
+    try:
+        with open(page_path, encoding="utf-8") as f:
+            page = f.read()
+    except OSError:
+        return False
+    found = NOTE_RE.findall(page)
+    if not found:
+        return False  # made before notes existed: only a full render adds them
+    blocks = blocks_for(any(ai for _, ai in found))
+    new = NOTE_RE.sub(lambda m: blocks.get(m.group(1), m.group(0)), page)
+    if new != page:
+        write_page(page_path, new, quiet=True)
+    return True
+
+
+def refresh_notes(site_dir, cache_dir, days):
+    """After my notes changed: rewrite the notes parts of the daily pages of days and of their weeks' pages.
+
+    Reads only the notes and the saved summaries (for the AI draft column) — no logs, no LLM, no network.
+    Returns {page file name: True if rewritten in place, False if it has no markers}; pages that don't exist are left out.
+    """
+    done = {}
+    for kind, when in [("daily", d) for d in sorted(set(days))] + [("weekly", m) for m in sorted({week_days(d)[0] for d in days})]:
+        name = page_file(kind, when)
+        path = os.path.join(site_dir, name)
+        if not os.path.exists(path):
+            continue
+
+        def blocks_for(ai, kind=kind, when=when):
+            saved = read_cache(cache_path(cache_dir, kind, when)) if ai else None
+            summary = saved["summary"] if saved else None
+            return daily_notes(when, summary, cache_dir) if kind == "daily" else weekly_notes(week_days(when), summary, cache_dir)
+        done[name] = patch_notes(path, blocks_for)
+    return done
 
 
 def til_body(s):
@@ -1223,13 +1360,17 @@ def tabs(slices):
         for k, label, rng, evs in slices) + "</nav>"
 
 
-def slice_panel(key, label, events, s, name, stale=""):
+def slice_panel(key, label, events, s, name, stale="", mine=None):
     """One tab. First view: summary → numbers → 한 일 (→ 결정/막힘 → 내일 → KPT on 전체);
     folded below: 학습 후보, 흐름, 문구 신호, AI 사용, 탐색 of this slice's events.
+    mine: daily_notes() — the 전체 tab's parts that show my notes.
     """
     day_level = key == "all"
     stats, b, r = day_stats(events), analyze.prompt_behavior(events), analyze.work_rhythm(events)
+    mine = mine or {}
     parts = [headline(s, "한 줄 요약" if day_level else "하루 전체 요약", stale)]
+    if day_level:
+        parts.append(mine.get("followup", ""))
     if events:
         parts.append(f"<h2>📊 {'오늘의' if day_level else label} 숫자</h2>" + kpis(stats, rhythm_kpis(r))
                      + f'<p class="sub">{BLOCK_NOTE}</p>')
@@ -1237,7 +1378,8 @@ def slice_panel(key, label, events, s, name, stale=""):
         parts.append(f'<p class="sub" style="margin-top:24px">{label}에는 기록이 없습니다.</p>')
     parts.append(done_section(s, key, name))
     if day_level:
-        parts += [decisions_blockers(s, b), next_section(s), kpt_section(s.get("kpt")), more("📚 학습 후보", til_body(s))]
+        parts += [decisions_blockers(s, b), mine.get("next") or next_section(s), mine.get("kpt") or kpt_section(s.get("kpt")),
+                  more("📚 학습 후보", til_body(s))]
     else:
         parts.append(slice_note(label))
     if events:
@@ -1246,8 +1388,8 @@ def slice_panel(key, label, events, s, name, stale=""):
     return f'<section class="slice s-{key}">' + "".join(parts) + "</section>"
 
 
-def render_page(day, stats, summary, all_events, nav="", note="", off=(), stale=""):
-    """Daily page. off: sources turned off (shown in 관측 범위); stale: see headline()."""
+def render_page(day, stats, summary, all_events, nav="", note="", off=(), stale="", notes_dir=None):
+    """Daily page. off: sources turned off (shown in 관측 범위); stale: see headline(); notes_dir: where my notes are."""
     s = summary or {}
     name = labeler(summary, all_events)
     events = [e for e in all_events if e["ts"].date() == day]
@@ -1257,7 +1399,8 @@ def render_page(day, stats, summary, all_events, nav="", note="", off=(), stale=
     parts = [page_head(f"일간 회고 {day}", "🗓", title, [
         ("프로젝트", chips(p for p, _ in projects[:4]) or "–"), ("관측 범위", coverage(events, off))],
         nav, TAB_ANCHORS), tabs(slices)]
-    parts += [slice_panel(k, label, evs, s, name, stale) for k, label, _, evs in slices]
+    mine = daily_notes(day, summary, notes_dir)
+    parts += [slice_panel(k, label, evs, s, name, stale, mine if k == "all" else None) for k, label, _, evs in slices]
     parts.append(f"<h2>📈 최근 7일</h2>{legend(AI_KEYS)}{week_chart(all_events, day)}")
     parts.append(foot(summary, note))
     return "".join(parts)
@@ -1410,12 +1553,12 @@ def highlights(s, name):
 
 
 def render_week(days, stats, summary, events, today=None, nav="", note="", day_links=None, prev_events=None,
-                off=(), stale=""):
+                off=(), stale="", notes_dir=None):
     """Weekly page: same look as the daily one; days after today are left empty.
 
     day_links: {day: href} of the daily pages that exist; the heatmap and the 날짜별 table link to them.
     prev_events: the week before's events, when they were loaded — the KPIs then show ▲▼ against it.
-    off, stale: as for render_page.
+    off, stale, notes_dir: as for render_page.
     """
     s = summary or {}
     name = labeler(summary, events)
@@ -1435,7 +1578,8 @@ def render_week(days, stats, summary, events, today=None, nav="", note="", day_l
     behavior = analyze.prompt_behavior(events)
     parts.append(decisions_blockers(s, behavior, "🔁 반복된 문제 · 패턴", day_hhmm))
     parts.append(next_section(s, "next_week", "➡️ 다음 주로"))
-    parts.append(kpt_section(s.get("kpt"), "✍️ 주간 KPT"))
+    mine = weekly_notes(days, summary, notes_dir)
+    parts += [mine["tasks"], mine["kpt"]]
     parts.append(day_table(days, stats, by_day, today, name, day_links))
     parts.append(more("📚 학습 후보", til_body(s)))
     parts.append(more("🗂 어디에 썼나", week_projects(by_day, days, stats, s, name)))
@@ -1607,8 +1751,8 @@ def main(argv=None):
     p.add_argument("events", nargs="+", help="events.jsonl files (one per machine)")
     p.add_argument("--date", help="YYYY-MM-DD (default: today)")
     p.add_argument("--week", action="store_true", help="weekly page for the Mon–Sun week containing --date")
-    p.add_argument("--llm", default="auto", choices=["auto", "api", "claude", "none"],
-                   help="summary backend (auto: API key → claude CLI → numbers only)")
+    p.add_argument("--llm", default="auto", choices=["auto", "api", "claude", "none", "cached"],
+                   help="summary backend (auto: API key → claude CLI → numbers only; cached: the saved summary, no LLM call)")
     p.add_argument("--no-llm", action="store_true", help="same as --llm none")
     p.add_argument("--out", help="output HTML path (default: retro_out/daily-DATE.html or weekly-MONDAY.html)")
     p.add_argument("--refresh", action="store_true", help="summarize again even if the saved summary matches the logs")
@@ -1647,7 +1791,7 @@ def main(argv=None):
         pages = site_pages(site)
         write_page(out, render_week(days, stats, summary, events, nav=page_nav("weekly", days[0], pages), note=note,
                                     day_links={d: page_file("daily", d) for d in days if d in pages["daily"]},
-                                    prev_events=prev_events or None, off=off, stale=stale))
+                                    prev_events=prev_events or None, off=off, stale=stale, notes_dir=cache_dir))
         update_site(site, cache_dir)
         return 0
 
@@ -1668,7 +1812,7 @@ def main(argv=None):
                                           cache_path(cache_dir, "daily", day), args.refresh, numbers)
     save_numbers(cache_path(cache_dir, "daily", day), numbers)
     write_page(out, render_page(day, stats, summary, all_events, nav=page_nav("daily", day, site_pages(site)), note=note,
-                                off=off, stale=stale))
+                                off=off, stale=stale, notes_dir=cache_dir))
     update_site(site, cache_dir)
     return 0
 
