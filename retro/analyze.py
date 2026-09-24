@@ -492,9 +492,11 @@ def facts_for_llm(behavior, rhythm, limit=FACTS_LIMIT):
         lg = r["longest"]
         focus += f", 가장 긴 구간 {lg['start']:%H:%M}–{lg['end']:%H:%M} {lg['project']}".rstrip()
     lev = "계산 불가" if r["leverage"] is None else f"{r['leverage']:g}건"
+    # The switch count is deliberately NOT sent to the LLM. A real weekly summary turned "73 switches" into
+    # "컨텍스트가 계속 끊김" — but with agents running in parallel, A→B→A is the normal shape of the day
+    # (66 switches in one real day), so there is nothing to interpret. The page shows it as a plain number.
     lines += [focus + ")",
-              f"기록상 프로젝트 변경 {r['switches']}회, 1시간 내 동시 프로젝트 최대 {r['max_concurrent']}개, "
-              f"내 지시 1건당 자동 실행 {lev}"]
+              f"1시간 내 동시 프로젝트 최대 {r['max_concurrent']}개, 내 지시 1건당 자동 실행 {lev}"]
     pc = [f"{p[:20]} {v['prompts']}→{v['commits']}" + (f"({v['minutes']}분)" if v["minutes"] is not None else "")
           for p, v in list(r["prompt_commit"].items())[:4]]
     if pc:
