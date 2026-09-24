@@ -32,6 +32,12 @@ import sys
 import webbrowser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# `retro schedule` runs under launchd with a bare PATH; look where installers put the claude CLI
+for _d in ("~/.local/bin", "~/.claude/local", "~/.npm-global/bin", "/opt/homebrew/bin", "/usr/local/bin"):
+    _d = os.path.expanduser(_d)
+    if os.path.isdir(_d) and _d not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = os.environ.get("PATH", "") + os.pathsep + _d
 sys.path.insert(0, HERE)
 import render  # noqa: E402
 
@@ -319,6 +325,14 @@ def cmd_doctor(args):
     print(f"\nsummary  {render.pick_backend('auto') or 'none (숫자만)'}"
           f"  — API 키: {'있음' if os.environ.get('ANTHROPIC_API_KEY') else '없음'},"
           f" claude CLI: {'있음' if shutil.which('claude') else '없음'}")
+    log = os.path.join(OUT_DIR, "retro.log")
+    if os.path.exists(PLIST) or os.path.exists(log):
+        when = dt.datetime.fromtimestamp(os.path.getmtime(log)).strftime("%m-%d %H:%M") if os.path.exists(log) else "아직 없음"
+        print(f"schedule {'켜짐' if os.path.exists(PLIST) else '꺼짐'}  — 마지막 자동 실행: {when}")
+        if os.path.exists(log):
+            with open(log, encoding="utf-8", errors="replace") as f:
+                for line in f.read().splitlines()[-4:]:
+                    print(f"         {line}")
     return 0
 
 
