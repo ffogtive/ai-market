@@ -48,7 +48,7 @@ CHROME_HELP = (
 # what each source reads — shown by `retro sources`, mirrored in PRIVACY.md
 SOURCES = {
     "claude": "~/.claude/projects/*/*.jsonl (Claude Code 프롬프트)",
-    "codex": "~/.codex/sessions, ~/.codex/history.jsonl (Codex 프롬프트)",
+    "codex": "~/.codex/sessions, ~/.codex/archived_sessions, ~/.codex/history.jsonl (Codex 프롬프트)",
     "git": "AI 세션을 연 폴더(최근 30일)의 git 커밋 제목",
     "chrome": "Chrome 방문 기록 (History 파일 복사본)",
     "extension": "~/Downloads/retro/browser-*.jsonl (브라우저 확장이 저장한 대화·방문 기록)",
