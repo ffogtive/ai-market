@@ -386,8 +386,10 @@ def collect_git(since, until, repos, author, fetch=True):
             if not ts:
                 continue
             stat = stat.strip()
-            m = re.findall(r"(\d+) (?:insertion|deletion)", stat)
-            suffix = f" (+{m[0]}/-{m[1]})" if len(m) == 2 else ""
+            # "5 insertions(+)", "2 deletions(-)" — either may be missing
+            ins = re.search(r"(\d+) insertion", stat)
+            dels = re.search(r"(\d+) deletion", stat)
+            suffix = f" (+{ins.group(1) if ins else 0}/-{dels.group(1) if dels else 0})" if ins or dels else ""
             out.append(event("git", ts, subject + suffix, os.path.basename(repo)))
     return out
 

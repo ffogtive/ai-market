@@ -151,11 +151,18 @@ class CompactTest(unittest.TestCase):
 
 SUMMARY = {
     "one_line": "결제 흐름을 고치고 가격 페이지를 냈다 <script>",
-    "highlights": [{"days": "월", "project": "shop", "result": "결제 버그 수정"},
-                   {"days": "수", "project": "blog", "result": "README 정리"}],
+    "keywords": ["결제", "가격", "출시"],
+    "highlights": [{"days": "월", "project": "shop", "result": "결제 버그 수정", "status": "완료",
+                    "evidence": [{"time": "월 12:00", "source": "git"}]},
+                   {"days": "수", "project": "blog", "result": "README 정리", "status": "요청함", "evidence": []}],
     "decisions": ["가격은 월 구독으로"],
     "blockers": ["테스트가 자주 깨짐"],
     "next_week": ["출시 공지"],
+    "til": [{"text": "월 구독이 해지율이 낮다", "evidence": [{"time": "수 14:00", "source": "claude.ai"}]}],
+    "kpt": {"keep": "커밋을 작게", "problem": "테스트가 느림", "try": "테스트 병렬화"},
+    "prompt_coaching": [{"kind": "고칠 점", "prompt": "add tests", "better": "결제 실패 경로에 테스트 3개 추가해줘",
+                         "why": "범위가 드러남", "evidence": [{"time": "월 09:30", "source": "claude"}]}],
+    "automation_ideas": [{"request": "테스트 돌려줘", "kind": "스크립트", "idea": "커밋 전에 테스트를 자동 실행"}],
     "activity_mix": [{"type": "개발", "percent": 70}, {"type": "기획", "percent": 30}],
     "project_labels": [{"raw": "shop", "label": "쇼핑몰"}],
 }
@@ -169,17 +176,21 @@ class RenderWeekTest(unittest.TestCase):
 
     def test_numbers_only(self):
         page = self.render(None)
-        for part in ("2026년 9월 21일 – 27일 주간 회고", "이번 주 숫자", "요일별 활동", "어디에 썼나", "날짜별",
-                     "09/21 (월)", "09/27 (일)", "활동한 날", "AI 사용", "숫자만 표시", "<svg"):
+        for part in ("2026년 9월 21일 – 27일 주간 회고", "이번 주 숫자", "요일×시간대", "어디에 썼나", "날짜별",
+                     "09/21 (월)", "09/27 (일)", "활동한 날", "AI 사용", "숫자만 표시", '<div class="hm">'):
             self.assertIn(part, page)
         self.assertNotIn("한 줄 요약", page)
-        self.assertIn('<td>09/21 (월)</td><td class="num">3</td><td class="num">1</td><td>shop</td><td>09:05–18:40</td>', page)
+        self.assertIn('<td>09/21 (월)</td><td class="num">3</td><td class="num"><span data-link="daily-2026-09-21.html#am">3</span>'
+                      '</td><td class="num"><span data-link="daily-2026-09-21.html#pm">0</span></td><td class="num">1</td>'
+                      '<td>shop</td><td>09:05–18:40</td>', page)
         self.assertIn('<td class="sub">09/25 (금)</td><td></td>', page)  # after "today": empty
 
     def test_with_summary(self):
         page = self.render(SUMMARY)
         for part in ("한 줄 요약", "이번 주 한 일", "결제 버그 수정", "결정한 것", "반복된 문제", "다음 주로",
-                     "활동 유형", "요약은 Claude가 작성"):
+                     "활동 유형", "요약은 Claude가 작성", "학습 후보", "월 구독이 해지율이 낮다", "주간 KPT", "테스트 병렬화",
+                     "자동화 검토 후보", "커밋 전에 테스트를 자동 실행", "검토할 지시 후보", "결제 실패 경로에 테스트 3개 추가해줘",
+                     '<span class="chip">결제</span>', '<span class="chip">요청함</span>', "월 12:00 git"):
             self.assertIn(part, page)
         self.assertIn("쇼핑몰", page)  # project labels apply to the chips, bars and table
         self.assertNotIn("<td>shop</td>", page)
