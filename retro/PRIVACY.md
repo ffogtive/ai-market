@@ -26,14 +26,16 @@
 |---|---|---|
 | Claude Code | `~/.claude/projects/*/*.jsonl` | 읽기 전용 |
 | Codex CLI | `~/.codex/sessions/**/*.jsonl`, `~/.codex/history.jsonl` | 읽기 전용. `auth.json`은 읽지 않음 |
-| git | `--git-root`(기본 `~`) 아래 깊이 4까지 `.git` 폴더 탐색 후 `git log` | 숨김 폴더·`Library`·`node_modules` 등 제외 |
+| git | 최근 30일 Claude Code·Codex 세션에 기록된 작업 폴더가 속한 레포에서 `git log` | 홈 폴더를 훑지 않음. 세션 파일은 첫 `cwd`까지만 읽음. 폴더 스캔은 `--git-root`를 줄 때만 |
 | Chrome 방문 기록 | Chrome 프로필의 `History` 파일 **복사본** | 원본을 잠그지 않도록 임시 폴더에 복사해 읽고 지움 |
 | YouTube | 사용자가 지정한 Google Takeout 파일(`--youtube`) | 지정할 때만 |
 | 다른 기기 | `retro add-host`로 등록한 ssh 호스트에서 같은 수집기 실행 | 사용자의 ssh 키 사용, 비밀번호 저장 안 함 |
 
 - **쓰는 곳:** `~/Retro/`(events.jsonl, daily-날짜.html, retro.log), `~/.config/retro/config.json`(등록한 호스트), macOS 예약 실행 시 `~/Library/LaunchAgents/`.
 - **요약(`render.py`):** 서술 요약이 필요할 때만 하루 타임라인을 **사용자 자신의 Anthropic 계정**으로 보냅니다(`ANTHROPIC_API_KEY` 또는 설치된 `claude -p`). retro 서버를 거치지 않습니다. `--llm none`이면 외부 전송 없이 숫자만 계산합니다.
-- **하지 않는 것:** Keychain·브라우저 쿠키 읽기, 전체 디스크 접근 권한 요청, 키 입력·화면 기록.
+- **소스 끄기:** `retro sources`로 무엇을 읽는지 보고, `retro off <소스>`로 끕니다(`~/.config/retro/config.json`에 저장, 등록한 서버에도 적용).
+- **하지 않는 것:** Keychain·브라우저 쿠키 읽기, 키 입력·화면 기록.
+- **권한:** Chrome 기록을 읽을 때 macOS가 터미널에 전체 디스크 접근 권한을 요구할 수 있습니다. 싫으면 `retro off chrome`(확장이 방문 기록을 대신 제공).
 
 ## 3. 브라우저 확장 (`extension/`)
 
@@ -46,6 +48,5 @@
 
 ## 알려진 한계 (공개 전 해결)
 - MCP 인증이 URL 속 키뿐입니다. URL이 유출되면 기록을 읽고 지울 수 있습니다 → OAuth로 교체 예정.
-- git 탐색이 홈 폴더 아래를 훑습니다(깊이 4). 명시한 폴더만 보도록 기본값 변경을 검토합니다.
 - 확장이 비공식 엔드포인트를 씁니다. 서비스 약관 검토가 필요합니다.
-- 소스별 끄기 설정과 전체 일시정지 스위치가 아직 없습니다.
+- 전체 일시정지 스위치는 없습니다(자동 실행은 `retro unschedule`로 끔).

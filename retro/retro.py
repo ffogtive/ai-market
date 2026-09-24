@@ -8,6 +8,8 @@
   retro --date 2026-09-23        a specific day
   retro add-host "ssh -p 10024 me@100.76.129.71"   also collect from a server, every run
   retro hosts | remove-host NAME
+  retro sources                  what each source reads, and which are off
+  retro off chrome | on chrome   turn a source off/on (claude codex git chrome extension)
   retro doctor                   check every source and the summary backend
   retro schedule --at 22:00      open the page automatically every day (macOS)
   retro --llm none               numbers only (no log text leaves this machine)
@@ -40,6 +42,16 @@ CHROME_HELP = (
 )
 
 
+# what each source reads — shown by `retro sources`, mirrored in PRIVACY.md
+SOURCES = {
+    "claude": "~/.claude/projects/*/*.jsonl (Claude Code 프롬프트)",
+    "codex": "~/.codex/sessions, ~/.codex/history.jsonl (Codex 프롬프트)",
+    "git": "AI 세션을 연 폴더(최근 30일)의 git 커밋 제목",
+    "chrome": "Chrome 방문 기록 (History 파일 복사본)",
+    "extension": "~/Downloads/retro/browser-*.jsonl (브라우저 확장이 저장한 대화·방문 기록)",
+}
+
+
 # ---------------------------------------------------------------- config
 def load_config():
     try:
@@ -62,8 +74,12 @@ def host_name(ssh_cmd):
 
 
 # ---------------------------------------------------------------- collect
-def collect_local(days, chrome):
-    cmd = [sys.executable, COLLECT, "--days", str(days), "--stdout"] + ([] if chrome else ["--no-chrome"])
+def skip_args(off):
+    return [a for s in off if s in SOURCES and s != "extension" for a in ("--skip", s)]
+
+
+def collect_local(days, chrome, off=()):
+    cmd = [sys.executable, COLLECT, "--days", str(days), "--stdout"] + ([] if chrome else ["--no-chrome"]) + skip_args(off)
     res = subprocess.run(cmd, capture_output=True, text=True)
     if "Operation not permitted" in res.stderr or "unable to open database" in res.stderr:
         print("⚠️  " + CHROME_HELP, file=sys.stderr)
@@ -77,11 +93,11 @@ def ssh_argv(ssh_cmd):
     return argv
 
 
-def collect_remote(ssh_cmd, days):
+def collect_remote(ssh_cmd, days, off=()):
     if not shutil.which("ssh"):
         return [], "ssh 명령이 없습니다"
     argv = ssh_argv(ssh_cmd)
-    argv.append(f"python3 - --days {days} --no-chrome --stdout")
+    argv.append(" ".join([f"python3 - --days {days} --no-chrome --stdout"] + skip_args(off)))
     with open(COLLECT, "rb") as script:
         try:
             res = subprocess.run(argv, stdin=script, capture_output=True, timeout=600)
@@ -125,9 +141,12 @@ def cmd_run(args):
     days = (dt.date.today() - day).days + 7  # enough history for the 7-day chart
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    ext_events = extension_events(day, days)
+    off = cfg.get("off", [])
+    if off:
+        print(f"· 꺼진 소스: {', '.join(off)} (켜기: retro on <소스>)", file=sys.stderr)
+    ext_events = [] if "extension" in off else extension_events(day, days)
     # the extension already records browsing; reading Chrome's DB too would double count
-    events, err = collect_local(days, chrome=not args.no_chrome and not ext_events)
+    events, err = collect_local(days, chrome=not args.no_chrome and not ext_events, off=off)
     print(f"· 이 기기: {counts(err)}", file=sys.stderr)
     if ext_events:
         by = {}
@@ -136,7 +155,7 @@ def cmd_run(args):
         print("· 브라우저 확장: " + ", ".join(f"{k} {v}" for k, v in by.items()), file=sys.stderr)
         events += ext_events
     for ssh_cmd in cfg.get("hosts", []):
-        got, err = collect_remote(ssh_cmd, days)
+        got, err = collect_remote(ssh_cmd, days, off)
         status = counts(err) if got or "events" in err else f"실패 — {err.strip().splitlines()[-1] if err.strip() else '응답 없음'}"
         print(f"· {host_name(ssh_cmd)}: {status}", file=sys.stderr)
         events += got
@@ -186,6 +205,24 @@ def cmd_remove_host(args):
     cfg["hosts"] = [h for h in cfg["hosts"] if host_name(h) != args.name and h != args.name]
     save_config(cfg)
     return cmd_hosts(args)
+
+
+def cmd_sources(_args):
+    off = set(load_config().get("off", []))
+    for name, what in SOURCES.items():
+        print(f"{'off' if name in off else 'on ':3}  {name:9} {what}")
+    print("\n끄기/켜기: retro off <소스> / retro on <소스>. 읽기만 하며, 요약 시 본인 Anthropic 계정 외로는 보내지 않습니다.")
+    return 0
+
+
+def cmd_toggle(args):
+    cfg = load_config()
+    off = [s for s in cfg.get("off", []) if s != args.source]
+    if args.cmd == "off":
+        off.append(args.source)
+    cfg["off"] = off
+    save_config(cfg)
+    return cmd_sources(args)
 
 
 PLIST = os.path.expanduser("~/Library/LaunchAgents/com.retro.daily.plist")
@@ -260,12 +297,16 @@ def main():
     r = sub.add_parser("remove-host")
     r.add_argument("name")
     sub.add_parser("doctor")
+    sub.add_parser("sources", help="what each source reads, and which are off")
+    for name in ("off", "on"):
+        t = sub.add_parser(name, help=f"turn a source {name}")
+        t.add_argument("source", choices=list(SOURCES))
     sc = sub.add_parser("schedule", help="run every day (macOS)")
     sc.add_argument("--at", default="22:00", help="HH:MM (default 22:00)")
     sub.add_parser("unschedule")
     args = p.parse_args()
     handler = {"add-host": cmd_add_host, "hosts": cmd_hosts, "remove-host": cmd_remove_host,
-               "doctor": cmd_doctor, "schedule": cmd_schedule, "unschedule": cmd_unschedule}.get(args.cmd, cmd_run)
+               "doctor": cmd_doctor, "sources": cmd_sources, "off": cmd_toggle, "on": cmd_toggle, "schedule": cmd_schedule, "unschedule": cmd_unschedule}.get(args.cmd, cmd_run)
     sys.exit(handler(args))
 
 
