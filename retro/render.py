@@ -13,6 +13,7 @@ Needs: pip install anthropic, and ANTHROPIC_API_KEY (or `ant auth login`).
 import argparse
 import datetime as dt
 import html
+import inspect
 import json
 import os
 import re
@@ -137,7 +138,8 @@ def summarize(day, events, stats):
     facts = (f"날짜: {day}\n직접 입력한 AI 지시 {stats['prompts']}건, 에이전트 간 지시 {stats['agent']}건, "
              f"커밋 {stats['commits']}건(+{stats['add']}/-{stats['dele']}), 웹 방문 {stats['web']}건")
     client = anthropic.Anthropic()
-    response = client.beta.messages.create(
+    create = client.beta.messages.create
+    params = dict(
         model=MODEL,
         max_tokens=16000,
         thinking={"type": "adaptive"},
@@ -147,6 +149,12 @@ def summarize(day, events, stats):
         output_config={"format": {"type": "json_schema", "schema": SUMMARY_SCHEMA}},
         messages=[{"role": "user", "content": f"{facts}\n\n<log>\n" + "\n".join(lines) + "\n</log>"}],
     )
+    # Python 3.9 only gets the 0.x SDK, which may not know newer request fields; send those raw.
+    known = inspect.signature(create).parameters
+    extra = {k: params.pop(k) for k in list(params) if k not in known}
+    if extra:
+        params["extra_body"] = extra
+    response = create(**params)
     if response.stop_reason == "refusal":
         raise RuntimeError("model declined to summarize this log")
     if response.stop_reason == "max_tokens":
