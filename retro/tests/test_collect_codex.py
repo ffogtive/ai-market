@@ -131,6 +131,21 @@ class CodexTest(HomeTestCase):
         got = self.collect()
         self.assertEqual([(e["text"], e["project"]) for e in got], [("write the release notes", "blog")])
 
+    def test_html_entities_are_unescaped(self):
+        """Some Codex clients store pasted text with literal HTML entities (seen on real logs:
+        "&#x20;" for a plain space, "&amp;"/"&lt;"/"&gt;" from rich-text paste) instead of the
+        plain characters. These are never something a user meant to type into a prompt."""
+        self.write("rollout-h-entities.jsonl", [
+            rec(60, "session_meta", meta("/work/shop", history_mode="paginated"), 0),
+            rec(60, "event_msg", paginated_user("확인해봤는데,&#x20; 1. 화질이 낮아 &amp; 2. a &lt;b&gt; c"), 1),
+        ])
+        ts = int(collect.parse_ts(iso(61)).timestamp())
+        with open(os.path.join(self.home, ".codex", "history.jsonl"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"session_id": "t9", "ts": ts, "text": "tui only &amp; entity"}) + "\n")
+        got = self.collect()
+        self.assertEqual([e["text"] for e in got],
+                         ["확인해봤는데, 1. 화질이 낮아 & 2. a <b> c", "tui only & entity"])
+
     def test_oldest_bare_format(self):
         """Early 2025 files: no envelope, only the first line has a timestamp."""
         self.write("rollout-c-bare.jsonl", [
