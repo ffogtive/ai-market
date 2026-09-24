@@ -9,6 +9,7 @@
   retro add-host "ssh -p 10024 me@100.76.129.71"   also collect from a server, every run
   retro hosts | remove-host NAME
   retro doctor                   check every source and the summary backend
+  retro schedule --at 22:00      open the page automatically every day (macOS)
   retro --llm none               numbers only (no log text leaves this machine)
 
 Run through `uv run`, so the system Python version does not matter. Servers
@@ -167,6 +168,49 @@ def cmd_remove_host(args):
     return cmd_hosts(args)
 
 
+PLIST = os.path.expanduser("~/Library/LaunchAgents/com.retro.daily.plist")
+
+
+def cmd_schedule(args):
+    """macOS: a LaunchAgent runs `retro` every day and opens the page."""
+    if sys.platform != "darwin":
+        print(f"macOS 전용입니다. Linux는 crontab에: {args.at.split(':')[1]} {args.at.split(':')[0]} * * * retro --no-open",
+              file=sys.stderr)
+        return 1
+    hour, minute = (int(x) for x in args.at.split(":"))
+    shim = os.path.expanduser("~/.local/bin/retro")
+    log = os.path.join(OUT_DIR, "retro.log")
+    os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(PLIST), exist_ok=True)
+    with open(PLIST, "w", encoding="utf-8") as f:
+        f.write(f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.retro.daily</string>
+  <key>ProgramArguments</key><array><string>/bin/sh</string><string>-lc</string><string>{shim}</string></array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>{hour}</integer><key>Minute</key><integer>{minute}</integer></dict>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict></plist>
+""")
+    subprocess.run(["launchctl", "unload", PLIST], capture_output=True)
+    res = subprocess.run(["launchctl", "load", PLIST], capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"launchctl 실패: {res.stderr.strip()}", file=sys.stderr)
+        return 1
+    print(f"✓ 매일 {hour:02d}:{minute:02d}에 회고 페이지가 열립니다 (로그: {log}). 끄기: retro unschedule", file=sys.stderr)
+    print("  참고: 자동 실행에서는 macOS가 Chrome 기록 권한을 물어볼 수 없어 Chrome 항목이 빠질 수 있습니다.", file=sys.stderr)
+    return 0
+
+
+def cmd_unschedule(_args):
+    if os.path.exists(PLIST):
+        subprocess.run(["launchctl", "unload", PLIST], capture_output=True)
+        os.remove(PLIST)
+    print("자동 실행을 껐습니다.", file=sys.stderr)
+    return 0
+
+
 def cmd_doctor(args):
     subprocess.run([sys.executable, COLLECT, "--doctor"])
     for ssh_cmd in load_config().get("hosts", []):
@@ -196,9 +240,12 @@ def main():
     r = sub.add_parser("remove-host")
     r.add_argument("name")
     sub.add_parser("doctor")
+    sc = sub.add_parser("schedule", help="run every day (macOS)")
+    sc.add_argument("--at", default="22:00", help="HH:MM (default 22:00)")
+    sub.add_parser("unschedule")
     args = p.parse_args()
     handler = {"add-host": cmd_add_host, "hosts": cmd_hosts, "remove-host": cmd_remove_host,
-               "doctor": cmd_doctor}.get(args.cmd, cmd_run)
+               "doctor": cmd_doctor, "schedule": cmd_schedule, "unschedule": cmd_unschedule}.get(args.cmd, cmd_run)
     sys.exit(handler(args))
 
 

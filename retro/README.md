@@ -8,6 +8,7 @@ retro                                              # 오늘의 회고 → ~/Retr
 retro add-host "ssh -p 10024 user@서버"            # 서버도 매번 함께 수집 (서버엔 아무것도 설치 안 함)
 retro --date 2026-09-23                            # 지난 날짜
 retro doctor                                       # 출처별 진단
+retro schedule --at 22:00                          # 매일 자동 실행 (맥), 끄기: retro unschedule
 retro update                                       # 최신 버전으로
 ```
 
