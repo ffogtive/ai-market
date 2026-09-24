@@ -65,7 +65,7 @@ class ClassifyTest(unittest.TestCase):
         ],
         an.APPROVE: [
             "PR 머지해줘", "머지해줘", "진행해줘", "ㅇㅇ", "응", "응 진행해", "좋아", "계속", "ok", "yes, go ahead",
-            "Continue", "lgtm", "[음성] 좋아 그렇게 해",
+            "Continue", "lgtm", "[음성] 좋아 그렇게 해", "재개", "3개 다 좋음",
         ],
         an.QUESTION: [
             "이거 어떻게 고쳐?", "좋아?", "아니면 B안으로 할까?", "이게 뭐야", "이 함수는 뭐하는 거지",
@@ -75,6 +75,8 @@ class ClassifyTest(unittest.TestCase):
             "로그인 페이지 만들어줘", "좋아 그런데 버튼 색 바꿔줘", "이거 고쳐줄래?", "왜 실패했는지 확인해줘",
             "결제 모듈 리팩터링 진행해 줘 테스트도 같이 돌려", "[첨부] README 업데이트", "[음성] 테스트 돌려줘",
             "fix the login bug", "Can you add a dark mode toggle?", "please rename the file",
+            "이 아이디어 킵해놔", "정면 각도만이 아니라 다양한 각도로 보여주는 스킬도 추가해줘",
+            "화면 전환은 생략하지 말고 자연스럽게 이어지게 만들어줘",
         ],
         an.OTHER: ["retro 테스트", "[첨부 파일]", "", "sjy@ffogtive.com"],
     }
@@ -110,6 +112,16 @@ class ClassifyTest(unittest.TestCase):
     def test_long_approval_is_instruction(self):
         # "진행" is an approval only when short; a long text with it is a request
         self.assertEqual(an.classify_prompt("좋아 이 방향으로 진행하고 결제 모듈 테스트까지 추가해줘"), an.INSTRUCT)
+
+    def test_ani_ra_and_ji_malgo_are_descriptive_not_complaints(self):
+        # "A가 아니라 B"(A 아니고 B)와 "…하지 말고 …해줘"(하지 마 연결어미)는 실사용 로그에서 반복 등장한
+        # 서술적 표현이지 거부·불만이 아니다. "아니면"과 같은 취급.
+        for text in ("이 색은 기본값이 아니라 강조색으로 써줘",
+                     "여기서 멈추지 말고 다음 단계까지 진행해줘"):
+            with self.subTest(text=text):
+                self.assertEqual(an.classify_prompt(text), an.INSTRUCT)
+        # but a bare rejection ("아니", "그거 말고") is still a complaint
+        self.assertEqual(an.classify_prompt("아니 그거 말고 다른 파일"), an.FIX)
 
 
 class BehaviorTest(unittest.TestCase):
