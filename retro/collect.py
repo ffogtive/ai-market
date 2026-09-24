@@ -24,8 +24,11 @@ import subprocess
 import sys
 from collections import defaultdict
 
+import socket
+
 LOCAL_TZ = dt.datetime.now().astimezone().tzinfo
-MAX_TEXT = 200
+HOST = socket.gethostname().split(".")[0]
+MAX_TEXT = 600  # enough context for the LLM summary; timeline.md trims further
 ISO_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$")
 
 
@@ -61,13 +64,14 @@ def parse_ts(value):
         return None
 
 
-def clip(text, n=MAX_TEXT):
+def clip(text, n=200):
     text = re.sub(r"\s+", " ", text or "").strip()
     return text if len(text) <= n else text[: n - 1] + "…"
 
 
-def event(source, ts, text, project=""):
-    return {"source": source, "ts": ts, "project": project, "text": clip(text)}
+def event(source, ts, text, project="", actor="human"):
+    """actor: human (typed by the user) | agent (one AI instructing another) | auto (bots, jobs)."""
+    return {"source": source, "ts": ts, "project": project, "text": clip(text, MAX_TEXT), "actor": actor, "host": HOST}
 
 
 def read_jsonl(path):
@@ -138,7 +142,9 @@ def collect_claude(since, until):
             if is_noise(text):
                 continue
             project = os.path.basename(rec.get("cwd") or "") or os.path.basename(os.path.dirname(path))
-            out.append(event("claude", ts, text, project))
+            # headless runs (claude -p, Agent SDK) are another program driving Claude, not the user
+            actor = "agent" if str(rec.get("entrypoint", "")).startswith("sdk") else "human"
+            out.append(event("claude", ts, text, project, actor))
     return out
 
 
@@ -422,7 +428,7 @@ def format_run(run):
     first, lastev = run[0], run[-1]
     proj = f"[{first['project']}] " if first["project"] else ""
     if len(run) == 1:
-        return f"- {first['ts']:%H:%M} **{first['source']}** {proj}{first['text']}"
+        return f"- {first['ts']:%H:%M} **{first['source']}** {proj}{clip(first['text'])}"
     titles = []
     for e in run:
         t = clip(e["text"], 70)
@@ -445,7 +451,10 @@ def render_timeline(events):
             counts[e["source"]] += 1
         summary = ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
         lines += [f"## {day} — {summary}", ""]
-        lines += [format_run(r) for r in group_runs(items)]
+        lines += [format_run(r) for r in group_runs([e for e in items if e.get("actor") == "human"])]
+        n_agent = sum(1 for e in items if e.get("actor") == "agent")
+        if n_agent:
+            lines.append(f"- (에이전트 간 지시 {n_agent}건 생략)")
         lines.append("")
     return "\n".join(lines)
 
@@ -463,10 +472,11 @@ def dedupe(events):
 
 def write_outputs(events, out_dir, to_stdout=False):
     events[:] = dedupe(events)
-    timeline = render_timeline(events)
-    if to_stdout:
-        print(timeline)
+    if to_stdout:  # machine-readable, so events from several hosts can be merged by render.py
+        for e in events:
+            print(json.dumps({**e, "ts": e["ts"].isoformat()}, ensure_ascii=False))
         return
+    timeline = render_timeline(events)
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "events.jsonl"), "w", encoding="utf-8") as f:
         for e in events:
@@ -485,7 +495,7 @@ def main():
     p.add_argument("--youtube", help="path to Takeout watch-history.json or watch-history.html")
     p.add_argument("--out", default="retro_out")
     p.add_argument("--no-chrome", action="store_true", help="skip local Chrome history")
-    p.add_argument("--stdout", action="store_true", help="print timeline to stdout instead of files (for ssh)")
+    p.add_argument("--stdout", action="store_true", help="print events as JSONL to stdout instead of files (for ssh)")
     p.add_argument("--doctor", action="store_true", help="show where each source looks and what it finds")
     args = p.parse_args()
 

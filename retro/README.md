@@ -1,4 +1,4 @@
-# retro — 로컬 활동 로그 수집기
+# retro — 로컬 활동 로그 수집기 + 일간 회고 페이지
 
 가설: Claude Code 대화, Codex 대화, git 커밋, YouTube 시청 기록을 합치면 "무엇을 만들었나"까지 하루가 복원된다.
 
@@ -36,3 +36,18 @@ python3 retro/collect.py --doctor   # 각 출처를 어디서 찾는지, 파일�
 
 - 모든 처리는 로컬에서만. 네트워크 전송 없음.
 - 각 항목은 200자로 잘림. `retro_out/`은 `.gitignore` 처리됨 — 공유 전 직접 확인할 것.
+
+## 일간 회고 페이지 만들기
+
+```bash
+pip install anthropic            # 요약에 Claude API 사용 (ANTHROPIC_API_KEY 또는 `ant auth login`)
+python3 retro/collect.py --days 7                       # 맥 → retro_out/events.jsonl
+ssh -p <포트> <user>@<서버> 'python3 - --days 7 --no-chrome --stdout' < retro/collect.py > retro_out/gpu.jsonl
+python3 retro/render.py --date 2026-09-23 retro_out/events.jsonl retro_out/gpu.jsonl
+open retro_out/daily-2026-09-23.html
+```
+
+- 숫자(시간대별 활동, 지시 수, 커밋, 사이트)는 라벨로 계산하고, 요약·한 일·결정·막힌 것·내일·활동 유형은 Claude가 작성.
+- `--no-llm`: API 없이 숫자만. 요약 실패(인증, 한도, 거절) 시에도 숫자 페이지는 생성됨.
+- 라벨: `actor`(human / agent: `claude -p` 같은 헤드리스 실행), `source`, `project`, `host`.
+- 해당 날짜의 **내가 입력한 로그 원문이 Anthropic API로 전송됨**. 민감하면 `--no-llm`.
