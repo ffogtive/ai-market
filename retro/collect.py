@@ -26,6 +26,13 @@ from collections import defaultdict
 
 LOCAL_TZ = dt.datetime.now().astimezone().tzinfo
 MAX_TEXT = 200
+ISO_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$")
+
+
+def run(cmd, cwd=None, timeout=30):
+    """subprocess.run(capture_output=True, text=True) without 3.7+ keywords."""
+    return subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          universal_newlines=True, timeout=timeout)
 
 
 def parse_ts(value):
@@ -37,12 +44,18 @@ def parse_ts(value):
             if value > 1e12:
                 value /= 1000
             return dt.datetime.fromtimestamp(value, dt.timezone.utc).astimezone(LOCAL_TZ)
-        s = str(value).strip().replace("Z", "+00:00").replace(" ", "T", 1)
-        # Python <3.11 accepts only 3 or 6 fractional digits
-        s = re.sub(r"\.(\d+)", lambda m: "." + (m.group(1) + "000000")[:6], s, count=1)
-        d = dt.datetime.fromisoformat(s)
-        if d.tzinfo is None:
-            d = d.replace(tzinfo=dt.timezone.utc)
+        # Hand-rolled ISO 8601: fromisoformat needs 3.7+ and is strict before 3.11.
+        m = ISO_RE.match(str(value).strip())
+        if not m:
+            return None
+        y, mo, d, h, mi, sec, frac, tz = m.groups()
+        usec = int((frac or "0")[:6].ljust(6, "0"))
+        tzinfo = dt.timezone.utc
+        if tz and tz != "Z":
+            sign = -1 if tz[0] == "-" else 1
+            tz = tz[1:].replace(":", "")
+            tzinfo = dt.timezone(sign * dt.timedelta(hours=int(tz[:2]), minutes=int(tz[2:4] or 0)))
+        d = dt.datetime(int(y), int(mo), int(d), int(h), int(mi), int(sec or 0), usec, tzinfo=tzinfo)
         return d.astimezone(LOCAL_TZ)
     except (ValueError, OverflowError, OSError):
         return None
@@ -185,14 +198,14 @@ def collect_git(since, until, roots, max_depth, author):
     for root in roots:
         for repo in find_repos(root, max_depth):
             cmd = [
-                "git", "-C", repo, "log", "--all", "--no-merges",
-                f"--since={since.isoformat()}", f"--until={until.isoformat()}",
-                "--pretty=format:%x1e%aI %ae%x1f%s", "--shortstat",
+                "git", "log", "--all", "--no-merges",
+                f"--since={int(since.timestamp())}", f"--until={int(until.timestamp())}",
+                "--pretty=format:%x1e%at %ae%x1f%s", "--shortstat",
             ]
             if author:
                 cmd.append(f"--author={author}")
             try:
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                res = run(cmd, cwd=repo)
             except (OSError, subprocess.TimeoutExpired):
                 continue
             for chunk in res.stdout.split("\x1e"):
@@ -202,7 +215,7 @@ def collect_git(since, until, roots, max_depth, author):
                     continue
                 head, _, stat = chunk.partition("\n")
                 meta, _, subject = head.partition("\x1f")
-                ts = parse_ts(meta.split(" ")[0])
+                ts = parse_ts(int(meta.split(" ")[0])) if meta.split(" ")[0].isdigit() else None
                 if not ts:
                     continue
                 stat = stat.strip()
@@ -285,8 +298,8 @@ def doctor(args, author):
     repos = [r for root in (args.git_root or ["~"]) for r in find_repos(root, args.git_depth)]
     print(f"git      {len(repos)} repos under {args.git_root or ['~']} (depth {args.git_depth}), author={author!r}")
     for r in repos[:15]:
-        last = subprocess.run(["git", "-C", r, "log", "--all", "-1", "--pretty=%aI %ae"],
-                              capture_output=True, text=True).stdout.strip()
+        out = run(["git", "log", "--all", "-1", "--pretty=%at %ae"], cwd=r).stdout.split()
+        last = f"{parse_ts(int(out[0])):%Y-%m-%d %H:%M} {out[1]}" if out and out[0].isdigit() else ""
         print(f"         {r}  last: {last}")
     files = list(chrome_history_files())
     print(f"chrome   {len(files)} profiles: {[p for p, _ in files]}")
