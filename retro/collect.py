@@ -626,8 +626,16 @@ def dedupe(events):
 def write_outputs(events, out_dir, to_stdout=False):
     events[:] = dedupe(events)
     if to_stdout:  # machine-readable, so events from several hosts can be merged by render.py
+        # always UTF-8: over ssh from a scheduled (launchd) run there is no LANG, and Python 3.6 then
+        # prints ASCII and dies at the first Korean prompt, after the counts on stderr looked fine
+        out = getattr(sys.stdout, "buffer", None)
         for e in events:
-            print(json.dumps({**e, "ts": e["ts"].isoformat()}, ensure_ascii=False))
+            line = json.dumps({**e, "ts": e["ts"].isoformat()}, ensure_ascii=False) + "\n"
+            if out:
+                out.write(line.encode("utf-8"))
+            else:
+                sys.stdout.write(line)
+        sys.stdout.flush()
         return
     timeline = render_timeline(events)
     os.makedirs(out_dir, exist_ok=True)

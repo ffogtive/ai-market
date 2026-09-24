@@ -51,3 +51,36 @@ class SnapshotTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RemoteOutputTest(unittest.TestCase):
+    """The 9/24 22:00 run: over ssh without LANG, Python 3.6 printed the counts, then died on the first
+    Korean prompt, and the run treated the counts as success."""
+
+    def test_collect_writes_utf8_even_with_an_ascii_stdout(self):
+        import json
+        import subprocess
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home)
+        os.makedirs(os.path.join(home, ".claude", "projects", "p"))
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
+        with open(os.path.join(home, ".claude", "projects", "p", "s.jsonl"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "user", "cwd": "/w/retro", "timestamp": now,
+                                "message": {"content": "회고 페이지 고쳐줘"}}, ensure_ascii=False) + "\n")
+        collect = os.path.join(os.path.dirname(__file__), "..", "collect.py")
+        env = dict(os.environ, HOME=home, PYTHONIOENCODING="ascii")
+        res = subprocess.run([sys.executable, collect, "--days", "1", "--stdout", "--no-chrome", "--skip", "git"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=60)
+        self.assertNotIn(b"Traceback", res.stderr)
+        lines = [json.loads(l) for l in res.stdout.decode("utf-8").splitlines()]
+        self.assertEqual([e["text"] for e in lines], ["회고 페이지 고쳐줘"])
+
+    def test_remote_failure(self):
+        crash = ("claude      25 events\ncodex        0 events\nTraceback (most recent call last):\n  File x\n"
+                 "UnicodeEncodeError: 'ascii' codec can't encode")
+        self.assertTrue(retro.remote_failure([], crash).startswith("수집 중 오류: UnicodeEncodeError"))
+        self.assertTrue(retro.remote_failure([{"a": 1}], crash))  # partial output with a crash is still a failure
+        self.assertEqual(retro.remote_failure([], "claude      25 events\ncodex 0 events"), "기록 25건을 셌지만 받지 못함")
+        self.assertEqual(retro.remote_failure([{"a": 1}], "claude 1 events"), "")
+        self.assertEqual(retro.remote_failure([], "claude 0 events\ncodex 0 events"), "")  # a quiet day is fine
+        self.assertIn("연결 실패(ssh: connect", retro.remote_failure([], "ssh: connect to host x: Operation timed out"))

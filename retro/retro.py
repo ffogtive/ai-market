@@ -105,7 +105,7 @@ def git_root_args(cfg):
 
 def collect_local(days, chrome, off=(), extra=()):
     cmd = [sys.executable, COLLECT, "--days", str(days), "--stdout"] + ([] if chrome else ["--no-chrome"]) + skip_args(off) + list(extra)
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if "Operation not permitted" in res.stderr or "unable to open database" in res.stderr:
         print("⚠️  " + CHROME_HELP, file=sys.stderr)
     return parse_jsonl(res.stdout), res.stderr
@@ -185,6 +185,19 @@ def recent_projects(limit=40):
         if raw and isinstance(raw, str) and e.get("source") not in WEB_SOURCES:
             seen[raw] = seen.get(raw, 0) + 1
     return sorted(seen.items(), key=lambda x: (-x[1], x[0]))[:limit]
+
+
+def remote_failure(got, err):
+    """Why a server's collection failed ("" when it worked). Counts on stderr alone are not success:
+    collect.py prints them before the events, so a crash afterwards used to look fine."""
+    if "Traceback (most recent call last)" in err:
+        return "수집 중 오류: " + (err.strip().splitlines()[-1] if err.strip() else "")
+    expected = sum(int(n) for s, n in (l.split()[:2] for l in err.splitlines() if l.strip().endswith("events")) if n.isdigit())
+    if got or (expected == 0 and "events" in err):
+        return ""
+    if expected:
+        return f"기록 {expected}건을 셌지만 받지 못함"
+    return f"연결 실패({(err.strip().splitlines()[-1] if err.strip() else '응답 없음')[:80]})"
 
 
 def counts(stderr):
@@ -269,13 +282,13 @@ def collect_all(day, days, no_chrome, path=None):
     for ssh_cmd in cfg.get("hosts", []):
         got, err = collect_remote(ssh_cmd, days, off)
         name = host_name(ssh_cmd)
-        if got or "events" in err:
+        why = remote_failure(got, err)
+        if not why:
             print(f"· {name}: {counts(err)}", file=sys.stderr)
             if save:
                 save_snapshot("host-" + name, got)
         else:
-            why = err.strip().splitlines()[-1] if err.strip() else "응답 없음"
-            got = fall_back("host-" + name, f"서버 {name}", f"연결 실패({why[:80]})")
+            got = fall_back("host-" + name, f"서버 {name}", why)
         events += got
 
     apply_aliases(events, cfg.get("aliases"))  # before anything reads the events: pages, summaries, the app
