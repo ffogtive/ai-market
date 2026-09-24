@@ -114,7 +114,7 @@ APPROVE_RE = re.compile(
 WORK_RE = re.compile(
     r"만들|고쳐|고치|추가|수정|삭제|지워|지우|넣어|바꿔|바꾸|변경|작성|구현|정리|적용|실행|돌려|설치|배포|커밋|푸시"
     r"|올려|반영|업데이트|리팩|검토|생성|제거|옮겨|이동|분석|조사|찾아|알려|설명|요약|번역|그려|열어|확인해|테스트해"
-    r"|빌드|띄워|붙여|연결|설정|세팅|보내"
+    r"|빌드|띄워|붙여|연결|설정|세팅|보내|완료해"  # "완료해"만 (완료됐어 같은 상황 공유는 지시가 아니다)
     r"|\b(fix|add|make|create|implement|update|remove|delete|write|run|build|refactor|rename|change|move|deploy"
     r"|commit|push|install|generate|convert|replace|check|review|explain|summarize|translate|show|find|open"
     r"|set ?up|clean ?up)\b", re.I)
@@ -218,15 +218,25 @@ def find_retries(prompts, kinds):
 
 
 def complaint_streaks(prompts, kinds):
-    """Runs of 2+ consecutive 수정·불만 prompts."""
+    """Runs of 2+ consecutive 수정·불만 prompts, no more than RETRY_WINDOW apart.
+
+    Without the time limit a real day chained 20:29 to 08:01 the next morning (11.5 hours) into one
+    "streak" — consecutive in order, but nothing a person would call one stretch of frustration.
+    """
     runs, cur = [], []
-    for e, kind in zip(prompts + [None], kinds + [None]):
-        if kind == FIX:
-            cur.append(e)
-            continue
+
+    def close():
         if len(cur) >= 2:
             runs.append({"start": cur[0]["ts"], "end": cur[-1]["ts"], "count": len(cur), "project": cur[0]["project"]})
-        cur = []
+        del cur[:]
+
+    for e, kind in zip(prompts + [None], kinds + [None]):
+        if kind == FIX:
+            if cur and e["ts"] - cur[-1]["ts"] > RETRY_WINDOW:
+                close()
+            cur.append(e)
+            continue
+        close()
     return runs
 
 

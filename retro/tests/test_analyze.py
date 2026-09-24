@@ -187,6 +187,24 @@ class BehaviorTest(unittest.TestCase):
         self.assertEqual(len(b["complaint_streaks"]), 1)  # the lone "틀렸어" is not a streak
         self.assertEqual(b["complaint_streaks"][0]["start"], at(1))
 
+    def test_complaint_streak_breaks_after_30_minutes(self):
+        """A real day chained 20:29 to 08:01 the next morning into one streak — consecutive, but not one stretch."""
+        b = an.prompt_behavior([prompt(at(0), "아니 틀렸어"), prompt(at(6), "왜 안 돼?"),
+                                prompt(at(6 + 60 * 12), "아니 그거 말고")])  # 12 hours later
+        self.assertEqual(len(b["complaint_streaks"]), 1)
+        self.assertEqual(b["complaint_streaks"][0]["count"], 2)  # the far one does not join
+        self.assertEqual(b["complaint_streaks"][0]["end"], at(6))
+
+    def test_complaint_streak_within_30_minutes_stays(self):
+        b = an.prompt_behavior([prompt(at(0), "아니 틀렸어"), prompt(at(6), "왜 안 돼?"), prompt(at(21), "다시 해봐")])
+        self.assertEqual(b["max_complaint_streak"], 3)
+
+    def test_plain_command_form_is_an_instruction(self):
+        """"작업완료해" 같은 반말 명령형이 어떤 지시 단서에도 안 걸려 기타로 빠지고 있었다."""
+        self.assertEqual(an.classify_prompt("최종 납품본으로 작업완료해"), an.INSTRUCT)
+        self.assertNotEqual(an.classify_prompt("작업 완료됐어"), an.INSTRUCT)  # 상황 공유는 지시가 아니다
+        self.assertNotEqual(an.classify_prompt("이부분은 털질감이 너무 이상해"), an.INSTRUCT)  # 형용사 오탐 금지
+
     def test_paste_ratio(self):
         b = an.prompt_behavior([prompt(at(0), "sjy@mac ai-market % retro"), prompt(at(1), "고쳐줘"),
                                 prompt(at(2), "ValueError: bad"), prompt(at(3), "좋아")])
