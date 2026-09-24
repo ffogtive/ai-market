@@ -25,7 +25,7 @@
 - 학생: 대학생·수험생 우선(Anki·Notion·GoodNotes 백업·LMS). 국내 중고생 앱(열품타·인강)은 D등급.
 
 ## 다음 할 일 (우선순위)
-1. **MCP 커넥터를 실제 Claude에 붙이기.** `retro/mcp/` → Cloudflare 배포(`npx wrangler login && kv namespace create RETRO` → id를 `wrangler.toml`에 → `npm run deploy`). 배포 URL을 Claude "커스텀 커넥터 추가"에. 모바일 대화가 자동 기록되는지, 예약 작업(Claude Cowork)에서 과거 대화 검색+`log_activity`가 도는지 PoC.
+1. **MCP 커넥터를 실제 Claude에 붙이기.** 사용자 맥에서 `retro/mcp/deploy.sh` 한 번 실행(로그인→KV→배포→키→스모크 테스트→URL 출력). 클라우드 세션은 `api.cloudflare.com`이 네트워크 정책에 막혀 있고 CF 토큰도 없어 배포 불가(9/24 확인). 출력 URL을 Claude "커스텀 커넥터 추가"에. 모바일 대화가 자동 기록되는지, 예약 작업(Claude Cowork)에서 과거 대화 검색+`log_activity`가 도는지 PoC.
 2. 되면 OAuth·개인정보처리방침·디렉터리 심사 준비(ChatGPT 앱 디렉터리 병행).
 3. 브라우저 확장 실계정 검증.
 

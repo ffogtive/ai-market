@@ -2,7 +2,7 @@ name = "retro-mcp"
 main = "src/index.js"
 compatibility_date = "2026-09-01"
 
-# deploy.sh creates the namespace and fills in the id
+# ./deploy.sh creates the namespace and fills in the id
 [[kv_namespaces]]
 binding = "RETRO"
 id = "REPLACE_WITH_KV_ID"
