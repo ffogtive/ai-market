@@ -201,9 +201,9 @@ class BehaviorTest(unittest.TestCase):
 
     def test_plain_command_form_is_an_instruction(self):
         """"작업완료해" 같은 반말 명령형이 어떤 지시 단서에도 안 걸려 기타로 빠지고 있었다."""
-        self.assertEqual(an.classify_prompt("최종 납품본으로 작업완료해"), an.INSTRUCT)
+        self.assertEqual(an.classify_prompt("최종본으로 작업완료해"), an.INSTRUCT)
         self.assertNotEqual(an.classify_prompt("작업 완료됐어"), an.INSTRUCT)  # 상황 공유는 지시가 아니다
-        self.assertNotEqual(an.classify_prompt("이부분은 털질감이 너무 이상해"), an.INSTRUCT)  # 형용사 오탐 금지
+        self.assertNotEqual(an.classify_prompt("이부분은 질감이 너무 이상해"), an.INSTRUCT)  # 형용사 오탐 금지
 
     def test_paste_ratio(self):
         b = an.prompt_behavior([prompt(at(0), "sjy@mac ai-market % retro"), prompt(at(1), "고쳐줘"),
