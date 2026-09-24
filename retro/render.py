@@ -326,9 +326,27 @@ def summarize(prompt, system=SYSTEM, schema=SUMMARY_SCHEMA):
     return json.loads(text)
 
 
+# why the last get_summary() produced no summary, in words the user can act on (shown in the page footer)
+LAST_FAILURE = ""
+
+
+def explain_failure(msg):
+    m = msg.lower()
+    if "oauth" in m or "not logged in" in m or "failed to authenticate" in m or "/login" in m:
+        return "Claude 로그인이 만료됐습니다. 터미널에서 claude auth login 실행 후 retro를 다시 실행하세요."
+    if "invalid api key" in m or "credentials" in m or "401" in m:
+        return "API 키가 올바르지 않습니다. 키를 지우면(unset ANTHROPIC_API_KEY) 내 Claude 로그인으로 요약합니다."
+    if "timed out" in m or "timeout" in m:
+        return "요약 시간이 초과됐습니다. 잠시 후 retro를 다시 실행하세요."
+    if "rate limit" in m or "429" in m or "usage limit" in m:
+        return "사용량 한도에 걸렸습니다. 잠시 후 다시 실행하세요."
+    return "요약 실패: " + msg.strip()[:120]
+
+
 def get_summary(choice, prompt, system=SYSTEM, schema=SUMMARY_SCHEMA, task=DAILY_TASK):
     """auto: API → on any failure the claude CLI with the user's own login → None (numbers only)."""
-    summary = None
+    global LAST_FAILURE
+    summary, why = None, ""
     api_failed = False
     backend = pick_backend(choice)
     if backend == "api":
@@ -342,17 +360,21 @@ def get_summary(choice, prompt, system=SYSTEM, schema=SUMMARY_SCHEMA, task=DAILY
             try:
                 summary = summarize(prompt, system, schema)
             except anthropic.AuthenticationError:
-                print("no valid API credentials (set ANTHROPIC_API_KEY or run `ant auth login`)", file=sys.stderr)
+                why = "no valid API credentials (set ANTHROPIC_API_KEY or run `ant auth login`)"
             except anthropic.RateLimitError:
-                print("rate limited — try again in a minute", file=sys.stderr)
+                why = "rate limited — try again in a minute"
             except anthropic.APIConnectionError:
-                print("network error reaching the API", file=sys.stderr)
+                why = "network error reaching the API"
             except anthropic.APIStatusError as e:
-                print(f"API error {e.status_code}: {e.message}", file=sys.stderr)
+                why = f"API error {e.status_code}: {e.message}"
             except (RuntimeError, ValueError) as e:  # refusal / truncation / bad JSON
-                print(f"summary unusable: {e}", file=sys.stderr)
+                why = f"summary unusable: {e}"
             except Exception as e:  # anything else the SDK throws must not cost the page
-                print(f"summary failed: {e!r}", file=sys.stderr)
+                why = f"summary failed: {e!r}"
+            if why:
+                print(why, file=sys.stderr)
+        else:
+            why = "anthropic SDK not installed"
         # auto: a stale or invalid API key shouldn't cost the summary when Claude Code is installed
         if not summary and choice == "auto" and shutil.which("claude"):
             print("· API 요약 실패 → claude CLI(내 Claude 로그인)로 재시도", file=sys.stderr)
@@ -361,7 +383,18 @@ def get_summary(choice, prompt, system=SYSTEM, schema=SUMMARY_SCHEMA, task=DAILY
         try:
             summary = summarize_cli(prompt, system, schema, task, drop_api_key=api_failed)
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as e:
+            why = str(e) or "timeout"
             print(f"summary failed ({e}) — rendering numbers only", file=sys.stderr)
+    if summary:
+        LAST_FAILURE = ""
+    elif choice == "none":
+        LAST_FAILURE = "요약 끔 (--llm none)"
+    elif not backend:
+        LAST_FAILURE = "요약 도구가 없습니다. Claude Code(claude)를 설치하고 로그인하거나 API 키를 설정하세요."
+    else:
+        LAST_FAILURE = explain_failure(why)
+    if LAST_FAILURE and choice != "none":
+        print(f"· {LAST_FAILURE}", file=sys.stderr)
     print(f"· 요약: {backend or '없음 (숫자만)'}{'' if summary or not backend else ' 실패'}", file=sys.stderr)
     return summary
 
@@ -562,7 +595,8 @@ def reflection(question):
 
 
 def foot(summary):
-    note = "숫자는 로그에서 계산 · 요약은 Claude가 작성" if summary else "숫자만 표시 (--no-llm 또는 요약 실패)"
+    note = ("숫자는 로그에서 계산 · 요약은 Claude가 작성" if summary
+            else f"숫자만 표시 — {esc(LAST_FAILURE or '요약 없음')}")
     return f'<p class="foot">{note}</p></main></body></html>'
 
 
