@@ -225,6 +225,9 @@ def codex_prompts(path):
             text, is_event = codex_user_text(payload), False
         if text is None:
             continue
+        # some Codex clients store pasted text with literal HTML entities (e.g. "&#x20;" for a
+        # space, or numeric refs for non-ASCII characters) instead of the plain characters
+        text = html.unescape(text)
         text = strip_attachments(text)
         if is_noise(text) or text.lstrip().startswith(CODEX_NOISE_PREFIXES):
             continue
@@ -266,7 +269,7 @@ def collect_codex(since, until):
     # history.jsonl covers prompts even when session files are gone
     for rec in read_jsonl(os.path.join(root, "history.jsonl")):
         ts = parse_ts(rec.get("ts"))
-        text = rec.get("text", "")
+        text = html.unescape(rec.get("text", ""))
         if not ts or not (since <= ts < until) or is_noise(text):
             continue
         key = (ts.isoformat()[:16], clip(text, 60))
