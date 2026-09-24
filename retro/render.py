@@ -17,7 +17,9 @@ summary is one call per day, and its "한 일" rows are split by their time.
 
 The summary is saved next to the page (summary-daily-DATE.json /
 summary-weekly-MONDAY.json) and reused while the logs stay the same, so a
-re-render costs no LLM call; --refresh summarizes again anyway. Each run also
+re-render costs no LLM call; --refresh summarizes again anyway. --preview prints
+the exact text a summary would send (and to which backend) and stops: no call,
+no page, no cache file. Each run also
 rewrites index.html (every page, newest first) and the ← · → rows at the top
 of the pages in that folder.
 
@@ -598,6 +600,34 @@ def cached_summary(choice, prompt, system, schema, task, path, refresh=False, nu
     return None, "", ""
 
 
+BACKEND_NAMES = {"api": "Anthropic API (ANTHROPIC_API_KEY, 내 계정)", "claude": "Claude Code (claude -p, 내 Claude 로그인)"}
+
+
+def preview_text(what, prompt, system, schema, task, choice, path, refresh=False):
+    """--preview: exactly what one summary call would send and to where. Calls nothing, writes nothing.
+
+    what: "2026-09-23 일간"; path: the summary cache file (a matching saved summary means nothing is sent).
+    """
+    backend = pick_backend(choice)
+    # summarize() sends system as the system prompt; summarize_cli() sends system + task as `claude -p`'s prompt
+    fixed = system + "\n\n" + task if backend == "claude" else system
+    saved = read_cache(path) if path else None
+    reuse = bool(saved) and saved.get("prompt_sha256") == prompt_hash(prompt, system, schema)
+    head = [f"요약 미리보기 — {what}. 아무것도 보내지 않았고 페이지도 만들지 않았습니다."]
+    if not backend:
+        why = "요약 끔(--llm none)" if choice == "none" else "요약 도구 없음(API 키도 claude CLI도 없음)"
+        head.append(f"보낼 곳: 없음 — {why}. 숫자만 만들고 아무것도 보내지 않습니다. 아래는 요약을 켜면 보낼 내용입니다.")
+    else:
+        retry = " (실패하면 Claude Code로 재시도)" if backend == "api" and choice == "auto" and shutil.which("claude") else ""
+        head.append(f"보낼 곳: {BACKEND_NAMES.get(backend, backend)}{retry}")
+    head.append(f"보낼 기록: {len(prompt):,}자 (아래 '보낼 기록' 전부) + 고정 지시문 {len(fixed):,}자 + 답 형식(JSON 스키마)")
+    if backend and reuse and not refresh:
+        head.append("저장된 요약이 바로 이 내용으로 만든 것입니다 → 지금 실행하면 보내지 않고 저장된 요약을 다시 씁니다"
+                    " (--refresh면 다시 보냄).")
+    return "\n".join(head + ["", "---- 고정 지시문 (retro가 붙이는 문구, 내 기록 아님) ----", fixed,
+                             "", "---- 보낼 기록 ----", prompt])
+
+
 def saved_dailies(days, by_day, stats, cache_dir):
     """{day: (daily summary, fresh)} for the week's days that have a saved daily summary.
 
@@ -747,8 +777,12 @@ BLOCK_NOTE = "연속 활동 구간: " + BLOCK_CAVEAT
 LEVERAGE_LABEL = "내 지시 1건당 자동 실행"
 
 
-def labeler(summary):
+def labeler(summary, events=()):
+    """raw project → the LLM's label; a name the user set (`retro alias`, the events carry project_raw) stays as is."""
     labels = {p["raw"]: p["label"] for p in (summary or {}).get("project_labels", [])}
+    for e in events:
+        if e.get("project_raw"):
+            labels.pop(e["project"], None)
     return lambda raw: labels.get(raw, raw)
 
 
@@ -1215,7 +1249,7 @@ def slice_panel(key, label, events, s, name, stale=""):
 def render_page(day, stats, summary, all_events, nav="", note="", off=(), stale=""):
     """Daily page. off: sources turned off (shown in 관측 범위); stale: see headline()."""
     s = summary or {}
-    name = labeler(summary)
+    name = labeler(summary, all_events)
     events = [e for e in all_events if e["ts"].date() == day]
     title = f"{day.year}년 {day.month}월 {day.day}일 ({WEEKDAYS[day.weekday()]}) 일간 회고"
     projects = merge_projects(stats["projects"], name)
@@ -1384,7 +1418,7 @@ def render_week(days, stats, summary, events, today=None, nav="", note="", day_l
     off, stale: as for render_page.
     """
     s = summary or {}
-    name = labeler(summary)
+    name = labeler(summary, events)
     today = today or dt.date.today()
     day_links = day_links or {}
     by_day = split_days(events, days)
@@ -1503,6 +1537,25 @@ def link_new_dailies(page, monday, dailies):
     return LATER_RE.sub(link, page)
 
 
+def forget_daily_links(site_dir, day):
+    """After `retro forget --date`: the week's page stops linking to that day's deleted page (the inverse of
+    link_new_dailies, so the links come back if the day is made again). → the weekly file name when changed."""
+    name = page_file("weekly", week_days(day)[0])
+    path = os.path.join(site_dir, name)
+    try:
+        with open(path, encoding="utf-8") as f:
+            page = f.read()
+    except OSError:
+        return None
+    href, label = page_file("daily", day), f"{day:%m/%d} ({WEEKDAYS[day.weekday()]})"
+    new = page.replace(f'<td><a href="{href}">{label}</a></td>', f"<td>{label}</td>")
+    new = re.sub(rf'<a href="({re.escape(href)}(?:#\w+)?)">(.*?)</a>', r'<span data-link="\1">\2</span>', new)
+    if new == page:
+        return None
+    write_page(path, new, quiet=True)
+    return name
+
+
 def write_index(site_dir, cache_dir, pages):
     """index.html: newest week first — its weekly page, then each day with the saved one-liner and counts."""
     path = os.path.join(site_dir, "index.html")
@@ -1561,6 +1614,8 @@ def main(argv=None):
     p.add_argument("--refresh", action="store_true", help="summarize again even if the saved summary matches the logs")
     p.add_argument("--cache-dir", help="where summaries are saved and reused (default: the folder of --out)")
     p.add_argument("--off", default="", help="comma-separated sources turned off, shown in the page's 관측 범위")
+    p.add_argument("--preview", action="store_true",
+                   help="print exactly what the summary would send, and to where; no LLM call, nothing written")
     args = p.parse_args(argv)
     off = [x for x in args.off.split(",") if x]
 
@@ -1578,6 +1633,10 @@ def main(argv=None):
         cache_dir = args.cache_dir or site
         stats = week_stats(by_day)
         prompt = build_week_prompt(days, by_day, stats, saved_dailies(days, by_day, stats, cache_dir))
+        if args.preview:
+            print(preview_text(f"{days[0]} 주간", prompt, WEEK_SYSTEM, WEEK_SCHEMA, WEEK_TASK, choice,
+                               cache_path(cache_dir, "weekly", days[0]), args.refresh))
+            return 0
         numbers = {"prompts": stats["prompts"], "commits": stats["commits"]}
         summary, note, stale = cached_summary(choice, prompt, WEEK_SYSTEM, WEEK_SCHEMA, WEEK_TASK,
                                               cache_path(cache_dir, "weekly", days[0]), args.refresh, numbers)
@@ -1600,6 +1659,10 @@ def main(argv=None):
     site = os.path.dirname(out) or "."
     cache_dir = args.cache_dir or site
     stats = day_stats(events)
+    if args.preview:
+        print(preview_text(f"{day} 일간", build_prompt(day, events, stats), SYSTEM, SUMMARY_SCHEMA, DAILY_TASK, choice,
+                           cache_path(cache_dir, "daily", day), args.refresh))
+        return 0
     numbers = {"prompts": stats["prompts"], "commits": stats["commits"]}
     summary, note, stale = cached_summary(choice, build_prompt(day, events, stats), SYSTEM, SUMMARY_SCHEMA, DAILY_TASK,
                                           cache_path(cache_dir, "daily", day), args.refresh, numbers)
