@@ -26,11 +26,15 @@ LONG_CHARS = 200  # > this: long prompt
 RETRY_WINDOW = dt.timedelta(minutes=30)
 RETRY_PREFIX = 40  # normalized first N chars equal -> same request
 RETRY_SIMILARITY = 0.8  # or difflib ratio >= this
+RETRY_COMPARE = 80  # the ratio looks at this many leading chars (difflib is slow on long pastes)
 FOCUS_GAP = dt.timedelta(minutes=15)  # activity closer than this chains into one block
 FOCUS_MIN = dt.timedelta(minutes=45)  # blocks at least this long count as focus
 CONCURRENT_WINDOW = dt.timedelta(hours=1)
 TOP_REPEATED = 5
 FACTS_LIMIT = 600
+FACTS_OMITTED = "(일부 생략)"  # last line of facts_for_llm when lines were dropped
+AGAIN_SHORT = 30  # "다시" alone is a complaint only in a prompt this short (or next to a complaint cue)
+PRE_BROWSE = dt.timedelta(minutes=10)  # web visits this soon before a prompt: "작업 직전 탐색"
 
 # ---------------------------------------------------------------- time slices
 SLICES = {"all": (0, 24), "am": (0, 12), "pm": (12, 24)}  # [start hour, end hour)
@@ -76,9 +80,11 @@ CATEGORIES = (INSTRUCT, QUESTION, APPROVE, FIX, PASTE, OTHER)
 
 TAG_RE = re.compile(r"^\s*\[(음성|첨부|첨부 파일)\]\s*")  # added by collect.py
 
-# terminal output: `user@host dir % cmd`, `user@host:~/dir$ cmd`, `$ git …`, stack traces, error lines
+# terminal output: `user@host dir % cmd`, `user@host:~/dir$ cmd`, `$ git …`, stack traces, error lines.
+# The (?<!…) lookbehinds here and below only let a greedy run start where a token starts: same matches, but a long
+# run without spaces is scanned once instead of once per character.
 PASTE_RE = re.compile(
-    r"[\w.-]+@[\w.-]+(:\S*[$#]|\s+\S+\s+[%$#])(\s|$)"
+    r"(?<![\w.-])[\w.-]+@[\w.-]+(:\S*[$#]|\s+\S+\s+[%$#])(\s|$)"
     r"|(^|\s)[$%] (git|npm|npx|pnpm|yarn|node|python3?|pip3?|cd|ls|cat|brew|curl|docker|make|sudo|bash|sh|zsh"
     r"|retro|claude|codex|gh)\b"
     r"|Traceback \(most recent call last\)|File \"[^\"]+\", line \d+"
@@ -86,14 +92,17 @@ PASTE_RE = re.compile(
     r"|command not found|No such file or directory|Permission denied")
 LOG_MARK_RE = re.compile(  # one or two may be typed; three or more look like a pasted log
     r"\b\d{1,2}:\d{2}:\d{2}\b|\[(INFO|WARN|WARNING|ERROR|DEBUG)\]|\b(INFO|WARN|DEBUG)\b"
-    r"|[\w./-]+\.(py|js|ts|tsx|jsx|go|rs|java|rb|sh|swift|kt):\d+|\bat [\w.$<>]+ \(|\bexit (code|status) \d+")
+    r"|(?<![\w./-])[\w./-]+\.(py|js|ts|tsx|jsx|go|rs|java|rb|sh|swift|kt):\d+|\bat [\w.$<>]+ \(|\bexit (code|status) \d+")
 PASTE_LINES = 5  # newlines, when a source keeps them
 
 FIX_RE = re.compile(
-    r"아니(?!면)|다시|왜\s*안|틀렸|틀린|틀려|말고|잘못|여전히|안\s*(돼|되네|되는데|되잖|됨|된다|먹|나와|보여|뜨)"
+    r"아니(?!면)|왜\s*안|틀렸|틀린|틀려|말고|잘못|여전히|안\s*(돼|되네|되는데|되잖|됨|된다|먹|나와|보여|뜨)"
     r"|(계속|또)\s*(에러|오류|안)"
     r"|^(no|nope|nah)\b|\b(wrong|incorrect|not working|still (broken|failing|fails))\b"
     r"|\b(doesn'?t|does not|didn'?t|did not) work|\bthat'?s not\b|\bnot what\b", re.I)
+# "다시 …" is often a plain request ("로그인 페이지 다시 설계하고 테스트 추가해줘"); with these it is a complaint
+AGAIN_RE = re.compile(r"다시")
+AGAIN_CUE_RE = re.compile(r"아니(?!면)|왜|안\s*돼|틀렸|말고|제대로")
 APPROVE_RE = re.compile(
     r"^(응|어|네|넵|예|ㅇㅇ|ㅇㅋ|ㄱㄱ|y)(?![가-힣a-z])|오케이|좋아|좋습니다|좋네|좋다|그래(?![프픽])|머지|계속|진행|고고"
     r"|알겠|맞아|감사|고마워"
@@ -125,11 +134,19 @@ def is_paste(text):
     return bool(PASTE_RE.search(text)) or text.count("\n") >= PASTE_LINES or len(LOG_MARK_RE.findall(text)) >= 3
 
 
+def is_fix(text):
+    """수정·불만 cues; "다시" counts only in a short prompt or next to 아니·왜·안 돼·틀렸·말고·제대로."""
+    if FIX_RE.search(text):
+        return True
+    return bool(AGAIN_RE.search(text)) and (len(text) <= AGAIN_SHORT or bool(AGAIN_CUE_RE.search(text)))
+
+
 def classify_prompt(text):
     """One of CATEGORIES. First match wins:
 
     1. 붙여넣기  terminal prompt / stack trace / error line / 3+ log marks / 5+ lines
-    2. 수정·불만  아니·다시·왜 안·틀렸·말고·안 돼 …, no/wrong/doesn't work (before approval: "아니 계속" is a fix)
+    2. 수정·불만  아니·왜 안·틀렸·말고·안 돼 …, no/wrong/doesn't work (before approval: "아니 계속" is a fix);
+                  "다시" only when the prompt is <= 30 chars or has one of those cues (see is_fix)
     3. 확인·승인  <= 20 chars, an approval cue (응·ㅇㅇ·좋아·머지·계속·진행·ok·yes …), no work verb, no trailing "?"
                   — so "PR 머지해줘" / "진행해줘" are approvals, "좋아 버튼 색 바꿔줘" is an instruction
     4. 질문       ends with "?" or starts with an English wh-/aux word
@@ -143,7 +160,7 @@ def classify_prompt(text):
         return OTHER
     if is_paste(t):
         return PASTE
-    if FIX_RE.search(t):
+    if is_fix(t):
         return FIX
     asks = bool(QUESTION_END_RE.search(t))
     if len(t) <= SHORT_CHARS and APPROVE_RE.search(t) and not WORK_RE.search(t) and not asks:
@@ -164,29 +181,36 @@ def retry_key(text):
 
 
 def near_same(a, b):
-    """Near-identical retry keys: same first RETRY_PREFIX chars, or difflib ratio >= RETRY_SIMILARITY."""
+    """Near-identical retry keys: same first RETRY_PREFIX chars, or a difflib ratio >= RETRY_SIMILARITY
+    over the first RETRY_COMPARE chars."""
     if a[:RETRY_PREFIX] == b[:RETRY_PREFIX]:
         return True
-    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    sm = difflib.SequenceMatcher(None, a[:RETRY_COMPARE], b[:RETRY_COMPARE], autojunk=False)
     return sm.real_quick_ratio() >= RETRY_SIMILARITY and sm.quick_ratio() >= RETRY_SIMILARITY \
         and sm.ratio() >= RETRY_SIMILARITY
 
 
+def retry_group(e):
+    """Only prompts to the same tool, on the same machine, in the same project can retry each other."""
+    return e["source"], e.get("host", ""), e["project"]
+
+
 def find_retries(prompts, kinds):
-    """Prompts that repeat an earlier one (near-identical) within RETRY_WINDOW.
+    """Prompts that repeat an earlier one (near-identical, same retry_group) within RETRY_WINDOW.
 
     Approvals ("계속", "ㅇㅇ") are left out: repeating them is not being stuck.
     """
-    out, seen = [], []  # seen: (ts, key) of earlier candidates
+    out, seen = [], []  # seen: (ts, group, key) of earlier candidates
     for e, kind in zip(prompts, kinds):
         key = retry_key(e["text"])
         if kind == APPROVE or len(key) < 2:
             continue
-        seen = [(ts, k) for ts, k in seen if e["ts"] - ts <= RETRY_WINDOW]
-        prev = next((ts for ts, k in seen if near_same(key, k)), None)
+        group = retry_group(e)
+        seen = [x for x in seen if e["ts"] - x[0] <= RETRY_WINDOW]
+        prev = next((ts for ts, g, k in seen if g == group and near_same(key, k)), None)
         if prev is not None:
             out.append({"ts": e["ts"], "prev_ts": prev, "project": e["project"], "text": clean(e["text"])[:80]})
-        seen.append((e["ts"], key))
+        seen.append((e["ts"], group, key))
     return out
 
 
@@ -204,7 +228,7 @@ def complaint_streaks(prompts, kinds):
 
 
 URL_RE = re.compile(r"https?://\S+|www\.\S+")
-PATH_RE = re.compile(r"\S*[/\\]\S*|\b[\w-]+\.[a-z]{1,5}\b")  # tokens with a slash (paths, ~/x), file names
+PATH_RE = re.compile(r"(?<!\S)\S*[/\\]\S*|(?<![\w-])[\w-]+\.[a-z]{1,5}\b")  # tokens with a slash (paths, ~/x), file names
 PUNCT_NUM_RE = re.compile(r"[^\w\s]|\d|_")
 
 
@@ -216,16 +240,21 @@ def request_key(text):
     return " ".join(t.split())
 
 
-def top_repeated(prompts, kinds, n=TOP_REPEATED):
-    """[(example text, count)] for requests seen 2+ times, most frequent first (approvals left out)."""
-    counts, example = Counter(), {}
+def repeated_groups(prompts, kinds, n=TOP_REPEATED):
+    """[{count, examples}] for requests seen 2+ times ("유사 표현 후보"), most frequent first.
+
+    examples: up to 2 distinct original texts (80 chars) in the order they came. Approvals are left out.
+    """
+    counts, examples = Counter(), {}
     for e, kind in zip(prompts, kinds):
         key = request_key(e["text"])
         if kind == APPROVE or not key:
             continue
         counts[key] += 1
-        example.setdefault(key, clean(e["text"])[:80])
-    return [(example[k], c) for k, c in counts.most_common() if c >= 2][:n]
+        ex, text = examples.setdefault(key, []), clean(e["text"])[:80]
+        if len(ex) < 2 and text not in ex:
+            ex.append(text)
+    return [{"count": c, "examples": examples[k]} for k, c in counts.most_common() if c >= 2][:n]
 
 
 def prompt_behavior(events):
@@ -234,7 +263,8 @@ def prompt_behavior(events):
     Keys: count, types {category: n} (all CATEGORIES, in order), length_median,
     short_ratio (< 20 chars), normal_ratio, long_ratio (> 200 chars), retries (n),
     retry_list [{ts, prev_ts, project, text}], complaint_streaks [{start, end, count,
-    project}], max_complaint_streak, paste_ratio, top_repeated [(text, count)],
+    project}], max_complaint_streak, paste_ratio, repeated [{count, examples}],
+    top_repeated [(first example, count)],
     by_slice {am, pm}, by_part {심야, 오전, 오후, 저녁}, first, last (datetime | None).
     Ratios are 0–1, rounded to 3 places; 0.0 when there are no prompts.
     """
@@ -251,6 +281,7 @@ def prompt_behavior(events):
     types = Counter(kinds)
     retries = find_retries(prompts, kinds)
     streaks = complaint_streaks(prompts, kinds)
+    groups = repeated_groups(prompts, kinds)
     return {
         "count": n,
         "types": {c: types[c] for c in CATEGORIES},
@@ -260,7 +291,8 @@ def prompt_behavior(events):
         "complaint_streaks": streaks,
         "max_complaint_streak": max((s["count"] for s in streaks), default=0),
         "paste_ratio": ratio(types[PASTE]),
-        "top_repeated": top_repeated(prompts, kinds),
+        "repeated": groups,
+        "top_repeated": [(g["examples"][0], g["count"]) for g in groups],
         "by_slice": {s: len(in_slice(prompts, s)) for s in ("am", "pm")},
         "by_part": {p: sum(1 for e in prompts if part_of_day(e["ts"]) == p) for p, _, _ in PARTS},
         "first": prompts[0]["ts"] if prompts else None,
@@ -287,7 +319,10 @@ def top_project(events):
 
 
 def focus_blocks(activity):
-    """Chains of activity with gaps < FOCUS_GAP that last >= FOCUS_MIN."""
+    """Chains of activity with gaps < FOCUS_GAP that last >= FOCUS_MIN and hold a prompt or a commit.
+
+    A chain of web visits alone is browsing, not focused work.
+    """
     chains, cur = [], []
     for e in activity:
         if cur and e["ts"] - cur[-1]["ts"] >= FOCUS_GAP:
@@ -300,7 +335,7 @@ def focus_blocks(activity):
         "start": c[0]["ts"], "end": c[-1]["ts"], "minutes": minutes(c[-1]["ts"] - c[0]["ts"]),
         "project": top_project(c),
         "prompts": sum(map(is_prompt, c)), "commits": sum(map(is_commit, c)), "web": sum(map(is_web, c)),
-    } for c in chains if c[-1]["ts"] - c[0]["ts"] >= FOCUS_MIN]
+    } for c in chains if c[-1]["ts"] - c[0]["ts"] >= FOCUS_MIN and any(not is_web(e) for e in c)]
 
 
 def project_segments(work):
@@ -397,6 +432,23 @@ def heatmap(events, days):
     return grid
 
 
+def browse_before_prompts(events, window=PRE_BROWSE, top=6):
+    """Web visits within window before one of the user's prompts ("작업 직전 탐색").
+
+    Keys: visits (n), web (all web visits), sites [(site, n)] most visited first.
+    """
+    prompt_ts = [e["ts"] for e in events if is_prompt(e)]
+    web = [e for e in events if is_web(e)]
+    hits, i = [], 0
+    for e in web:  # both lists are sorted by ts: walk to the first prompt after this visit
+        while i < len(prompt_ts) and prompt_ts[i] <= e["ts"]:
+            i += 1
+        if i < len(prompt_ts) and prompt_ts[i] - e["ts"] <= window:
+            hits.append(e)
+    sites = Counter(e["project"] for e in hits if e["project"])
+    return {"visits": len(hits), "web": len(web), "sites": sites.most_common(top)}
+
+
 # ---------------------------------------------------------------- facts for the LLM
 def hm(minutes_):
     h, m = divmod(minutes_, 60)
@@ -406,7 +458,9 @@ def hm(minutes_):
 def facts_for_llm(behavior, rhythm, limit=FACTS_LIMIT):
     """Key numbers as a short Korean block, so the LLM interprets instead of recounting.
 
-    Lines are dropped from the end (repeated requests first) to stay within limit chars.
+    Lines are dropped from the end (repeated requests first) to stay within limit chars,
+    and then the block ends with FACTS_OMITTED. Wording is neutral: blocks of continuous
+    records, not "focus".
     """
     b, r = behavior, rhythm
     lines = ["[자동 계산 지표 — 다시 세지 말고 해석만]"]
@@ -420,20 +474,23 @@ def facts_for_llm(behavior, rhythm, limit=FACTS_LIMIT):
         ]
     else:
         lines.append("내 지시 없음")
-    focus = f"몰입 {hm(r['focus_minutes'])}({len(r['focus_blocks'])}구간"
+    focus = f"연속 활동 구간 {hm(r['focus_minutes'])}({len(r['focus_blocks'])}개"
     if r["longest"]:
         lg = r["longest"]
-        focus += f", 최장 {lg['start']:%H:%M}–{lg['end']:%H:%M} {lg['project']}".rstrip()
-    lev = "없음" if r["leverage"] is None else f"{r['leverage']:g}"
+        focus += f", 가장 긴 구간 {lg['start']:%H:%M}–{lg['end']:%H:%M} {lg['project']}".rstrip()
+    lev = "계산 불가" if r["leverage"] is None else f"{r['leverage']:g}건"
     lines += [focus + ")",
-              f"프로젝트 전환 {r['switches']}회, 1시간 내 동시 프로젝트 최대 {r['max_concurrent']}개, 레버리지(위임/지시) {lev}"]
+              f"기록상 프로젝트 변경 {r['switches']}회, 1시간 내 동시 프로젝트 최대 {r['max_concurrent']}개, "
+              f"내 지시 1건당 자동 실행 {lev}"]
     pc = [f"{p[:20]} {v['prompts']}→{v['commits']}" + (f"({v['minutes']}분)" if v["minutes"] is not None else "")
           for p, v in list(r["prompt_commit"].items())[:4]]
     if pc:
         lines.append("지시→커밋(첫 커밋까지): " + ", ".join(pc))
     if b["top_repeated"]:
         lines.append("반복 요청: " + ", ".join(f"\"{t[:30]}\"×{c}" for t, c in b["top_repeated"]))
-    while len(lines) > 2 and len("\n".join(lines)) > limit:
-        lines.pop()
+    if len("\n".join(lines)) > limit:
+        while len(lines) > 2 and len("\n".join(lines + [FACTS_OMITTED])) > limit:
+            lines.pop()
+        lines.append(FACTS_OMITTED)
     text = "\n".join(lines)
     return text if len(text) <= limit else text[:limit - 1] + "…"

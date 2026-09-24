@@ -10,6 +10,7 @@
 | 회고 페이지 생성 | `retro/render.py` | ✅ 실데이터 검증. 숫자는 로그로 계산, 서술은 Claude 요약(구조화 출력). 백엔드 auto: API 키 → `claude -p` CLI(키 불필요) → 숫자만 |
 | 주간 회고 페이지 | `retro week`, `render.py --week` | ✅ (9/24) 월–일 한 주: 합계 KPI·요일별 막대·프로젝트·날짜별 표는 로그로 계산, 한 일·결정·반복된 문제·다음 주는 주간 요약(일간과 같은 백엔드·폴백). 프롬프트는 하루 60줄·줄당 120자로 압축. 합성 데이터 테스트(`retro/tests/test_weekly.py`), **실데이터 미검증** |
 | 요약 저장 · 페이지 이동 · 목록 | `render.py`, `retro --refresh`, `~/Retro/index.html` | ✅ (9/24) 요약을 `~/Retro/summary-*.json`에 저장, 로그가 그대로면 LLM 호출 없이 재사용(`--refresh`로 강제). 새 요약 실패 시 이전 요약 + 이유 표시. 주간 프롬프트는 저장된 일간 요약 + 하루 원문 20줄. 페이지 위 `← 이전 날 · 주간 보기 · 목록 · 다음 날 →`(있는 페이지만, 이후 생긴 페이지는 다음 실행 때 링크 갱신), 날짜별 표에서 일간으로 링크, `index.html` 최신 주부터. 합성 데이터 테스트(`retro/tests/test_cache_nav.py`), **실데이터 미검증** |
+| 템플릿 v2 (탭·분석) | `retro/render.py`, `retro/analyze.py` | ✅ (9/24) 일간 **전체/오전/오후 탭**(CSS만, `daily-날짜.html#am`), 관측 범위, 연속 활동 구간·기록상 프로젝트 변경·내 지시 1건당 자동 실행, 흐름(연속 활동 띠·프로젝트 타임라인), 프롬프트 문구 신호(자동 분류·추정, 유사 표현 후보), AI 사용 위임 사슬(나 → 도구 → 자동 실행 도구·기기), 작업 직전 탐색, 학습 후보·내일 첫 할 일·KPT, 무거운 섹션은 펼쳐보기. 주간: 지난주 대비 ▲▼, 요일×시간대 히트맵, 오전/오후 링크. 요약 스키마 PLAN §5 + 근거(시각·도구)·완료/요청함, 호출 1번 유지. 외부 리뷰(중립 이름·관측 범위·가벼운 첫 화면·오래된 요약 표시) 반영. 테스트 `retro/tests/test_template_v2.py`, 임시 HOME e2e + 390/1200px 스크린샷, **실데이터·실제 LLM 요약 미검증**, 시각 디자인은 추후 |
 | 한 줄 설치 + 명령 | `retro/retro.py`, `retro/install.sh` | ✅ uv로 Python 무관. `retro` / `add-host` / `schedule`(macOS launchd) / `doctor`. 신규 환경 설치·실행·업데이트 검증 |
 | 설정·실행 화면 | `retro app`, `retro/app.py` | ✅ (9/24) 터미널 없이 쓰는 로컬 웹 화면(와이어프레임). 홈: 만든 회고 목록 + "오늘/이번 주 회고 만들기"(진행 줄 실시간 표시). 설정: 소스 켜기·끄기, ssh 서버·저장소 추가/삭제, 자동 실행(맥), 요약 상태. 127.0.0.1 전용·실행마다 토큰·Host/Origin 검사. 테스트 `retro/tests/test_app.py`, **사용자 맥 미검증**, 디자인은 추후 |
 | 브라우저 확장 | `retro/extension/` | ✅ 가짜 서버 e2e. ChatGPT·Claude 오늘 대화 + 방문 기록 → `~/Downloads/retro/browser-날짜.jsonl`. **실계정 미검증** |
@@ -29,6 +30,7 @@
 - 학생: 대학생·수험생 우선(Anki·Notion·GoodNotes 백업·LMS). 국내 중고생 앱(열품타·인강)은 D등급.
 
 ## 다음 할 일 (우선순위)
+0. **템플릿 v2 실데이터 확인.** 사용자 맥에서 `retro update` 후 `retro --refresh`·`retro week --refresh` 한 번(요약 스키마가 바뀌어 새로 요약). 탭(`#am`/`#pm`), 펼쳐보기, 주간 ▲▼, 요약의 근거·"요청함" 표시가 맞는지 확인. 그다음 시각 디자인(사용자). 알려진 문제: 추가만 있는 커밋은 수집 단계에서 줄 수가 빠져 `+0 / −0줄`로 보임(`collect.py` shortstat 파싱).
 1. **로컬 수집기를 기본 경로로 다듬기.** 9/24: git은 AI 세션 폴더에서만(홈 폴더 탐색 제거), `retro sources/off/on`, AI 없이 커밋한 저장소용 `retro add-repo` 추가. 남은 것: 사용자 맥에서 실사용 확인(`retro update` 후 `retro sources`, `retro`), 확장 실계정 검증.
 2. (2순위) **MCP 커넥터를 실제 Claude에 붙이기.** 사용자 맥에서 `retro/mcp/deploy.sh` 한 번 실행(로그인→KV→배포→키→스모크 테스트→URL 출력). 클라우드 세션은 `api.cloudflare.com`이 네트워크 정책에 막혀 있고 CF 토큰도 없어 배포 불가(9/24 확인). 출력 URL을 Claude "커스텀 커넥터 추가"에. 모바일 대화가 자동 기록되는지, 예약 작업(Claude Cowork)에서 과거 대화 검색+`log_activity`가 도는지 PoC.
 3. 되면 OAuth·개인정보처리방침(`PRIVACY.md` 초안 있음, 끝의 '알려진 한계' 해결)·디렉터리 심사 준비(ChatGPT 앱 디렉터리 병행).
