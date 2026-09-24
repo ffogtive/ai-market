@@ -51,6 +51,8 @@ def check_ssh(text):
     if not text.isprintable() or any(c in SHELL_META for c in text):
         return None, "따옴표·; | & $ 같은 특수문자는 쓸 수 없습니다."
     args = shlex.split(text)
+    if args and args[0] != "ssh":  # "me@host" or "-p 10024 me@host" — same as `retro add-host`
+        args, text = ["ssh"] + args, "ssh " + text
     if args[:1] != ["ssh"]:
         return None, "ssh로 시작하는 접속 명령을 넣어주세요. 예: ssh -p 10024 user@서버"
     hosts, i = [], 1
@@ -288,7 +290,7 @@ def settings_body(flash):
                    for h in hosts) or '<p class="muted">등록된 서버 없음</p>'
     parts.append(f'<section><h2>ssh 서버</h2>{rows}'
                  '<form class="add" method="post" action="/settings/host/add">'
-                 '<input type="text" name="ssh" placeholder="ssh -p 10024 user@서버" autocomplete="off" required>'
+                 '<input type="text" name="ssh" placeholder="user@서버 또는 -p 10024 user@서버" autocomplete="off" required>'
                  '<button data-wait="연결 확인 중… (최대 10초)">추가</button></form>'
                  '<p class="muted">비밀번호 없이(ssh 키로) 접속되는 서버만 됩니다. 추가할 때 연결을 확인합니다.</p></section>')
 
@@ -300,7 +302,9 @@ def settings_body(flash):
                  '<form class="add" method="post" action="/settings/repo/add">'
                  '<input type="text" name="path" placeholder="~/code" autocomplete="off" required>'
                  '<button>추가</button></form>'
-                 '<p class="muted">AI 세션 없이 커밋한 저장소, 또는 저장소들이 들어 있는 폴더.</p></section>')
+                 + (f'<div class="actions">{post_button("/settings/repo/pick", "폴더 선택…")}</div>'
+                    if sys.platform == "darwin" else "")
+                 + '<p class="muted">AI 세션 없이 커밋한 저장소, 또는 저장소들이 들어 있는 폴더.</p></section>')
 
     at = schedule_state()
     if sys.platform == "darwin":
@@ -363,6 +367,22 @@ def act_repo_add(_server, form):
     return ("ok" if ok else "err"), out
 
 
+def act_repo_pick(_server, _form):
+    """macOS folder picker, so nobody has to type a path."""
+    if sys.platform != "darwin":
+        return "err", "폴더 선택 창은 맥에서만 됩니다. 경로를 직접 넣어주세요."
+    try:
+        res = subprocess.run(["osascript", "-e", 'POSIX path of (choose folder with prompt "수집할 저장소 폴더를 고르세요")'],
+                             capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.TimeoutExpired):
+        return "err", "폴더 선택 창을 열지 못했습니다."
+    path = res.stdout.strip()
+    if res.returncode != 0 or not path:
+        return "err", "선택을 취소했습니다."
+    ok, out = call(retro.cmd_add_repo, path=path)
+    return ("ok" if ok else "err"), out
+
+
 def act_repo_remove(_server, form):
     call(retro.cmd_remove_repo, path=form.get("path", ""))
     return "ok", f"삭제됨: {form.get('path', '')}"
@@ -385,7 +405,7 @@ def act_unschedule(_server, _form):
 
 ACTIONS = {"/run": act_run, "/settings/source": act_source, "/settings/host/add": act_host_add,
            "/settings/host/remove": act_host_remove, "/settings/repo/add": act_repo_add,
-           "/settings/repo/remove": act_repo_remove, "/settings/schedule": act_schedule,
+           "/settings/repo/remove": act_repo_remove, "/settings/repo/pick": act_repo_pick, "/settings/schedule": act_schedule,
            "/settings/unschedule": act_unschedule}
 
 

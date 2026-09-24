@@ -211,11 +211,31 @@ class SettingsTest(AppTestCase):
               "ssh -o StrictHostKeyChecking=no -J jump me@host", "ssh -4C host"]
         for cmd in ok:
             self.assertEqual(app.check_ssh(cmd)[0], cmd, cmd)
-        bad = ["me@host", "", "ssh", "ssh host; rm -rf ~", "ssh host uptime", "ssh $(id) host",
+        # like `retro add-host`, a bare target gets "ssh " in front
+        self.assertEqual(app.check_ssh("me@host")[0], "ssh me@host")
+        self.assertEqual(app.check_ssh("-p 10024 me@host")[0], "ssh -p 10024 me@host")
+        bad = ["", "ssh", "ssh host; rm -rf ~", "ssh host uptime", "ssh $(id) host",
                "ssh -o ProxyCommand=touch host", "ssh -oLocalCommand=x host", "ssh -F cfg host",
                "ssh -p abc host", "ssh -J -oProxyCommand=x host", "ssh 'host'", "ssh host\nid", "scp host"]
         for cmd in bad:
             self.assertIsNone(app.check_ssh(cmd)[0], cmd)
+
+    def test_repo_pick(self):
+        repo = os.path.join(self.home, "picked")
+        os.makedirs(repo)
+        picked = subprocess.CompletedProcess([], 0, stdout=repo + "/\n", stderr="")
+        with mock.patch.object(app.sys, "platform", "darwin"), \
+                mock.patch.object(app.subprocess, "run", return_value=picked):
+            self.post("/settings/repo/pick", {})
+        self.assertEqual(len(self.cfg()["git_roots"]), 1)
+        cancelled = subprocess.CompletedProcess([], 1, stdout="", stderr="User canceled.")
+        with mock.patch.object(app.sys, "platform", "darwin"), \
+                mock.patch.object(app.subprocess, "run", return_value=cancelled):
+            self.post("/settings/repo/pick", {})
+        self.assertEqual(len(self.cfg()["git_roots"]), 1)
+        with mock.patch.object(app.sys, "platform", "linux"):
+            self.post("/settings/repo/pick", {})
+        self.assertEqual(len(self.cfg()["git_roots"]), 1)
 
     def test_add_host(self):
         with mock.patch.object(retro.subprocess, "run") as run:
