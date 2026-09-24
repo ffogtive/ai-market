@@ -32,7 +32,7 @@
 | 다른 기기 | `retro add-host`로 등록한 ssh 호스트에서 같은 수집기 실행 | 사용자의 ssh 키 사용, 비밀번호 저장 안 함 |
 | 설정 화면 (`retro app`) | 새로 읽는 것 없음. 위 명령들과 같은 설정 파일·`~/Retro/daily-*.html`·`weekly-*.html`, 회고 쓰기에서 저장한 `~/Retro/notes-*.json`과 저장된 요약(AI 초안 표시용), 그리고 마지막으로 모은 `~/Retro/events.jsonl`(프로젝트 이름 고르기·"요약에 보내는 내용 보기")만 사용 | 이 컴퓨터(127.0.0.1)에서만 열리는 임시 서버. 실행할 때마다 새 무작위 토큰이 있어야 열리고, 다른 사이트의 요청은 거부. 외부로 보내는 것 없음, Ctrl+C로 종료 |
 
-- **쓰는 곳:** `~/Retro/`(events.jsonl, daily-날짜.html, weekly-월요일날짜.html, index.html, retro.log, 요약 JSON, 내가 쓴 회고 `notes-*.json`), `~/.config/retro/config.json`(등록한 호스트·저장소·꺼진 소스·프로젝트 묶기), macOS 예약 실행 시 `~/Library/LaunchAgents/`. 지우는 법은 아래 "지우기".
+- **쓰는 곳:** `~/Retro/`(events.jsonl, daily-날짜.html, weekly-월요일날짜.html, index.html, retro.log, 요약 JSON, 내가 쓴 회고 `notes-*.json`, 서버·Chrome별 마지막 성공 수집 사본 `sources/*.jsonl` — 자동 실행처럼 수집이 실패한 날 대신 쓰고, 그 사실을 페이지 "관측 범위"에 "수집 실패"로 표시), `~/.config/retro/config.json`(등록한 호스트·저장소·꺼진 소스·프로젝트 묶기), macOS 예약 실행 시 `~/Library/LaunchAgents/`. 지우는 법은 아래 "지우기".
 - **요약 저장:** Claude가 쓴 요약 결과(한 줄 요약·한 일·결정·학습 후보·KPT 초안 등)를 `~/Retro/summary-daily-날짜.json`·`summary-weekly-월요일날짜.json`에 저장합니다. 로그 원문은 넣지 않고, 로그가 바뀌었는지 비교할 해시(SHA-256)와 만든 시각·지시·커밋 수만 함께 둡니다(`--llm none`이면 지시·커밋 수만 — 목록 페이지용). 내 컴퓨터에만 남으며, 지우면 다음 실행 때 다시 요약합니다.
 - **내가 쓴 회고(`notes.py`):** `retro app`의 회고 쓰기에서 저장한 KPT·가장 의미 있었던 일·내일 첫 할 일·다음 날 확인(완료/이어가기/취소)은 `~/Retro/notes-날짜.json`(주간 `notes-weekly-월요일날짜.json`)에만 저장됩니다. 저장하면 이 컴퓨터에서 페이지의 해당 부분만 다시 씁니다(AI 호출 없음). **AI 요약(LLM)에는 보내지 않습니다** — 일간·주간 요약 프롬프트에 넣지 않으며(테스트로 확인), 나중에 넣게 되면 사용자가 켤 때만 하도록 하고 이 문서에 먼저 적습니다. 지우려면 그 파일을 지우면 됩니다(다음에 페이지를 만들 때 "(직접 작성)"으로 돌아감). 첫 할 일을 저장하지 않은 날은 그날 요약 JSON의 AI 초안을 다음 날 확인에 "(AI 제안)"으로 보여줍니다(이 컴퓨터 안에서만 읽음).
 - **숫자·분석(`analyze.py`):** 시간대별 활동, 연속 활동 구간, 기록상 프로젝트 변경, 문구 신호(자동 분류), 반복 요청, 작업 직전 탐색은 모두 이 컴퓨터에서 계산합니다. AI 요약을 켜면 LLM에는 전과 같은 프롬프트 줄(내가 입력한 지시·커밋 제목·방문 제목)에 더해 이 집계 숫자 몇 줄(600자 이내)과 반복 요청 문장 최대 5개(각 60자)가 함께 갑니다.
@@ -48,7 +48,7 @@ retro가 **만든 것**만 지웁니다. 원본 기록(Claude·Codex·git·Chrom
 | 명령 | 지워지는 것 | 남는 것 |
 |---|---|---|
 | `retro forget --date 날짜` | `~/Retro/daily-날짜.html`, `summary-daily-날짜.json`, `notes-날짜.json`(있으면). 그 뒤 `index.html`과 이웃 페이지의 ← · → 링크를 다시 만들고, 그 주 주간 페이지에서 그날 링크를 뺌 | 그 주 주간 페이지·주간 요약(`weekly-*.html`, `summary-weekly-*.json` — 그날 숫자·요약이 섞여 있음), `events.jsonl`(마지막 수집 사본 — 다음 실행 때 덮어씀), 다른 날 파일 |
-| `retro forget --all` | `~/Retro`에서 retro가 쓴 파일 전부: 일간·주간 페이지, 요약 JSON, 메모(`notes-*.json`), `events.jsonl`, `index.html`(retro가 만든 것일 때만), `retro.log`, 쓰다 남은 임시 파일 | `~/Retro`의 다른 파일, 설정(`~/.config/retro/config.json`: 서버·저장소·꺼진 소스·프로젝트 묶기), 자동 실행(`retro unschedule`로 끔), 확장이 저장한 `~/Downloads/retro/browser-*.jsonl`(수집 소스) |
+| `retro forget --all` | `~/Retro`에서 retro가 쓴 파일 전부: 일간·주간 페이지, 요약 JSON, 메모(`notes-*.json`), 마지막 성공 수집 사본(`sources/*.jsonl`), `events.jsonl`, `index.html`(retro가 만든 것일 때만), `retro.log`, 쓰다 남은 임시 파일 | `~/Retro`의 다른 파일, 설정(`~/.config/retro/config.json`: 서버·저장소·꺼진 소스·프로젝트 묶기), 자동 실행(`retro unschedule`로 끔), 확장이 저장한 `~/Downloads/retro/browser-*.jsonl`(수집 소스) |
 | (둘 다) | — | **원본:** `~/.claude`, `~/.codex`, git 저장소, Chrome 기록, 등록한 서버의 기록 |
 
 ### 전송 미리보기 (`retro --preview`, 설정 화면 "요약에 보내는 내용 보기")

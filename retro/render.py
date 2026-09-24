@@ -776,7 +776,7 @@ details.more>summary{cursor:pointer;list-style:none}details.more>summary::-webki
 details.more>summary h2::after{content:"펼쳐보기 ▸";float:right;font-size:12.5px;font-weight:400;color:var(--muted);margin-top:4px}
 details.more[open]>summary h2::after{content:"접기 ▾"}
 ul.todo{list-style:none;padding:0}ul.todo li::before{content:"☐ ";color:var(--muted)}
-.sub{color:var(--muted);font-size:13px}.foot{margin-top:40px;color:var(--muted);font-size:12.5px}
+.sub{color:var(--muted);font-size:13px}.warn{color:#c24f3b}.foot{margin-top:40px;color:var(--muted);font-size:12.5px}
 a{color:var(--fg);text-underline-offset:2px}.pnav{font-size:13px;color:var(--muted);margin:0 0 20px}.pnav .off{opacity:.45}
 .anchor{position:absolute;top:0}
 .tabs{display:flex;gap:4px;margin:18px 0 0;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:1}
@@ -836,13 +836,17 @@ def source_label(source, host):
     return TOOL_NAMES.get(source, source) + (f" ({host})" if host else "")
 
 
+COLLECT_FAILURES = []  # set by main from --failed: sources this run could not collect (see retro.collect_all)
+
+
 def coverage(events, off=(), fmt="%H:%M"):
     """관측 범위: what the page is built from — records per source and host, first–last record, sources turned off."""
     by = Counter((e["source"], e.get("host", "")) for e in events)
     seen = " · ".join(f"{esc(source_label(src, host))} {n}" for (src, host), n in by.most_common()) or "기록 없음"
     span = f" · {events[0]['ts'].strftime(fmt)} – {events[-1]['ts'].strftime(fmt)}" if events else ""
     off = f"<br>꺼진 소스: {esc(', '.join(off))}" if off else ""
-    return f'{seen}{span}{off}<br><span class="sub">{CLOUD_NOTE}</span>'
+    failed = "".join(f'<br><span class="warn">⚠️ 수집 실패 — {esc(f)}</span>' for f in COLLECT_FAILURES)
+    return f'{seen}{span}{off}{failed}<br><span class="sub">{CLOUD_NOTE}</span>'
 
 
 def more(head, body):
@@ -1764,9 +1768,11 @@ def main(argv=None):
     p.add_argument("--refresh", action="store_true", help="summarize again even if the saved summary matches the logs")
     p.add_argument("--cache-dir", help="where summaries are saved and reused (default: the folder of --out)")
     p.add_argument("--off", default="", help="comma-separated sources turned off, shown in the page's 관측 범위")
+    p.add_argument("--failed", action="append", default=[], help="a source this run could not collect (repeatable)")
     p.add_argument("--preview", action="store_true",
                    help="print exactly what the summary would send, and to where; no LLM call, nothing written")
     args = p.parse_args(argv)
+    COLLECT_FAILURES[:] = args.failed
     off = [x for x in args.off.split(",") if x]
 
     all_events = load(args.events)
