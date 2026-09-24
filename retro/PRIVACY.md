@@ -30,6 +30,7 @@
 | Chrome 방문 기록 | Chrome 프로필의 `History` 파일 **복사본** | 원본을 잠그지 않도록 임시 폴더에 복사해 읽고 지움 |
 | YouTube | 사용자가 지정한 Google Takeout 파일(`--youtube`) | 지정할 때만 |
 | 다른 기기 | `retro add-host`로 등록한 ssh 호스트에서 같은 수집기 실행 | 사용자의 ssh 키 사용, 비밀번호 저장 안 함 |
+| 설정 화면 (`retro app`) | 새로 읽는 것 없음. 위 명령들과 같은 설정 파일·`~/Retro/daily-*.html`·`weekly-*.html`만 사용 | 이 컴퓨터(127.0.0.1)에서만 열리는 임시 서버. 실행할 때마다 새 무작위 토큰이 있어야 열리고, 다른 사이트의 요청은 거부. 외부로 보내는 것 없음, Ctrl+C로 종료 |
 
 - **쓰는 곳:** `~/Retro/`(events.jsonl, daily-날짜.html, weekly-월요일날짜.html, index.html, retro.log, 요약 JSON), `~/.config/retro/config.json`(등록한 호스트), macOS 예약 실행 시 `~/Library/LaunchAgents/`.
 - **요약 저장:** Claude가 쓴 요약 결과(한 줄 요약·한 일·결정 등)를 `~/Retro/summary-daily-날짜.json`·`summary-weekly-월요일날짜.json`에 저장합니다. 로그 원문은 넣지 않고, 로그가 바뀌었는지 비교할 해시(SHA-256)와 만든 시각·지시·커밋 수만 함께 둡니다. 내 컴퓨터에만 남으며, 지우면 다음 실행 때 다시 요약합니다.
