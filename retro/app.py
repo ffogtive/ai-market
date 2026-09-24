@@ -6,7 +6,9 @@ The page can run commands, so: it listens on 127.0.0.1 only; every request needs
 this run's random token (?t= once, then an HttpOnly SameSite=Strict cookie); the
 Host header must be 127.0.0.1/localhost (DNS rebinding); every change is a POST
 with a same-origin Origin/Referer (CSRF); only ~/Retro/daily-*.html and
-weekly-*.html are served; user input never reaches a shell. Standard library only.
+weekly-*.html are served; user input never reaches a shell. Deleting (기록 삭제)
+takes a second POST with confirm=1; /preview shows what a summary would send and
+sends nothing. Standard library only.
 """
 import argparse
 import contextlib
@@ -173,8 +175,10 @@ button{font:inherit;min-height:40px;padding:6px 14px;cursor:pointer}
 .actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
 .muted{color:GrayText;font-size:14px}
 .flash{border:2px solid;border-radius:8px;padding:8px 12px;margin:16px 0}
-.flash.err{border-color:#c33}.flash.ok{border-color:#393}
+.flash.err{border-color:#c33}.flash.ok{border-color:#393}.flash.warn{border-color:#c90}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;margin:8px 0;max-height:320px;overflow:auto}
+pre.full{max-height:none}
+select,input[type=date]{font:inherit;padding:6px;max-width:100%}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0 24px}
 ul{padding-left:20px;margin:8px 0}li{padding:2px 0}
 """
@@ -215,10 +219,14 @@ def layout(title, body, nonce):
 
 
 def flash_html(flash):
+    """(kind, text) or (kind, text, (action, label, fields)): the last one adds a confirm button (see act_forget)."""
     if not flash:
         return ""
-    kind, text = flash
-    return f'<div class="flash {kind}"><pre>{e(text)}</pre></div>'
+    kind, text = flash[:2]
+    confirm = ""
+    if len(flash) > 2:
+        confirm = f'<div class="actions">{post_button(*flash[2])}<a href="/settings">취소</a></div>'
+    return f'<div class="flash {kind}"><pre>{e(text)}</pre>{confirm}</div>'
 
 
 def post_button(action, label, fields=()):
@@ -237,6 +245,46 @@ def page_label(name):
     return f"{d:%Y-%m-%d} ({retro.render.WEEKDAYS[d.weekday()]})"
 
 
+PREVIEW_PAGE_RE = re.compile(r"(daily|weekly)-(\d{4}-\d{2}-\d{2})\.html")
+
+
+def preview_link(page):
+    m = PREVIEW_PAGE_RE.fullmatch(page)
+    return (f' <a class="muted" href="/preview?kind={m[1]}&amp;date={m[2]}">요약에 보내는 내용 보기</a>' if m else "")
+
+
+def preview_body(kind, date):
+    """GET /preview: what the summary for that page sends, from the last collected ~/Retro/events.jsonl.
+
+    Same function as `retro --preview` (render.py --preview): nothing is sent, nothing is written.
+    """
+    try:
+        day = dt.date.fromisoformat(date) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date) else None
+    except ValueError:
+        day = None
+    if kind not in ("daily", "weekly") or not day:
+        return '<h1>요약에 보내는 내용</h1><p>날짜가 올바르지 않습니다.</p>'
+    week = kind == "weekly"
+    title = f"요약에 보내는 내용 · {page_label(f'{kind}-{day}.html')}" + (" 주간" if week else "")
+    cli = f"retro {'week ' if week else ''}--preview --date {day}"
+    events = os.path.join(retro.OUT_DIR, "events.jsonl")
+    if not os.path.isfile(events):
+        return (f"<h1>{e(title)}</h1><p>아직 모은 기록이 없습니다. 홈에서 회고를 한 번 만든 뒤 다시 보세요.</p>"
+                f'<p class="muted">터미널에서: {e(cli)}</p>')
+    argv = (["--week"] if week else []) + ["--preview", "--date", str(day), "--cache-dir", retro.OUT_DIR, events]
+    buf = io.StringIO()
+    with _capture, contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        code = retro.render.main(argv)
+    text = buf.getvalue().strip()
+    when = dt.datetime.fromtimestamp(os.path.getmtime(events)).strftime("%m-%d %H:%M")
+    if code != 0:
+        text = f"마지막으로 모은 기록에 {'이 주가' if week else '이 날이'} 없습니다.\n\n{text}"
+    return (f"<h1>{e(title)}</h1>"
+            f'<p class="muted">마지막으로 모은 기록(~/Retro/events.jsonl, {when})으로 만든 내용입니다. 아무것도 보내지 않았습니다. '
+            f"새로 모으면 달라질 수 있습니다 — 모으면서 정확히 보려면 터미널에서 <b>{e(cli)}</b></p>"
+            f'<pre class="full">{e(text)}</pre><p><a href="/">← 홈</a></p>')
+
+
 def home_body(job, flash):
     running = job["running"]
     week = post_button("/run", "이번 주 회고 만들기", [("kind", "weekly")]) if hasattr(retro, "cmd_week") \
@@ -253,8 +301,8 @@ def home_body(job, flash):
                      f'<pre id="lines">{e(chr(10).join(job["lines"]))}</pre>{link}</section>')
     cols = []
     for prefix, title in (("daily-", "일간"), ("weekly-", "주간")):
-        items = "".join(f'<li><a href="/file/{e(n)}" target="_blank" rel="noopener">{e(page_label(n))}</a></li>'
-                        for n in list_pages(prefix))
+        items = "".join(f'<li><a href="/file/{e(n)}" target="_blank" rel="noopener">{e(page_label(n))}</a>'
+                        f'{preview_link(n)}</li>' for n in list_pages(prefix))
         cols.append(f"<div><h2>{title}</h2>{f'<ul>{items}</ul>' if items else '<p class=muted>아직 없음</p>'}</div>")
     parts.append(f'<section><h2>만든 회고</h2><div class="cols">{"".join(cols)}</div></section>')
     return "".join(parts)
@@ -306,6 +354,8 @@ def settings_body(flash):
                     if sys.platform == "darwin" else "")
                  + '<p class="muted">AI 세션 없이 커밋한 저장소, 또는 저장소들이 들어 있는 폴더.</p></section>')
 
+    parts.append(alias_section(cfg))
+
     at = schedule_state()
     if sys.platform == "darwin":
         log = os.path.join(retro.OUT_DIR, "retro.log")
@@ -323,7 +373,39 @@ def settings_body(flash):
     parts.append('<section><h2>요약 상태</h2>'
                  f'<p>요약: {e(backend)} · API 키: {"있음" if os.environ.get("ANTHROPIC_API_KEY") else "없음"}'
                  f' · claude CLI: {"있음" if shutil.which("claude") else "없음"}</p></section>')
+    parts.append(FORGET_SECTION)
     return "".join(parts)
+
+
+def alias_section(cfg):
+    """프로젝트 이름 묶기: the aliases with remove buttons, and an add form offering recently seen folder/repo names."""
+    aliases = cfg.get("aliases") if isinstance(cfg.get("aliases"), dict) else {}
+    rows = "".join(f'<div class="row"><div class="grow"><b>{e(raw)}</b> → {e(name)}</div>'
+                   f'{post_button("/settings/alias/remove", "풀기", [("raw", raw)])}</div>'
+                   for raw, name in sorted(aliases.items())) or '<p class="muted">묶은 프로젝트 없음</p>'
+    seen = retro.recent_projects()
+    if seen:
+        options = "".join(f'<option value="{e(raw)}">{e(raw)} ({n}건){" → " + e(aliases[raw]) if raw in aliases else ""}'
+                          "</option>" for raw, n in seen)
+        pick = f'<select name="raw" required>{options}</select>'
+    else:  # nothing collected yet: type the name
+        pick = '<input type="text" name="raw" placeholder="폴더·레포 이름" autocomplete="off" required>'
+    return (f'<section><h2>프로젝트 이름 묶기</h2>{rows}'
+            f'<form class="add" method="post" action="/settings/alias/add">{pick}'
+            '<input type="text" name="name" placeholder="보여줄 프로젝트 이름" autocomplete="off" required>'
+            '<button>묶기</button></form>'
+            '<p class="muted">폴더·레포 이름이 여러 개인 프로젝트를 한 이름으로 셉니다. 다음 회고부터 적용되고, '
+            '웹사이트는 묶지 않습니다. 고를 이름은 최근에 모은 기록에서 가져옵니다.</p></section>')
+
+
+FORGET_SECTION = (
+    '<section><h2>기록 삭제</h2>'
+    '<form class="add" method="post" action="/settings/forget">'
+    '<input type="date" name="date" required><button>이 날 기록 삭제…</button></form>'
+    f'<div class="actions">{post_button("/settings/forget", "전부 삭제…", [("scope", "all")])}</div>'
+    '<p class="muted">retro가 만든 것(페이지·요약·메모)만 지웁니다. 누르면 지울 파일을 먼저 보여주고, 한 번 더 눌러야 지웁니다. '
+    '원본 기록(Claude·Codex·git·Chrome)은 그대로라 다시 만들면 같은 날이 다시 생깁니다. '
+    '수집을 멈추려면 위의 "수집할 소스"에서 끄세요.</p></section>')
 
 
 # ---------------------------------------------------------------- actions (POST) → (flash kind, message)
@@ -403,10 +485,46 @@ def act_unschedule(_server, _form):
     return ("ok" if ok else "err"), out
 
 
+def act_alias_add(_server, form):
+    ok, out = call(retro.cmd_alias, raw=form.get("raw", ""), name=form.get("name", ""), remove=False)
+    return ("ok" if ok else "err"), out
+
+
+def act_alias_remove(_server, form):
+    ok, out = call(retro.cmd_alias, raw=form.get("raw", ""), name="", remove=True)
+    return ("ok" if ok else "err"), out
+
+
+def act_forget(_server, form):
+    """Two POSTs: the first lists what would go and shows a confirm button; only confirm=1 deletes."""
+    everything = form.get("scope") == "all"
+    date = form.get("date", "")
+    if not everything:
+        try:
+            day = dt.date.fromisoformat(date) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date) else None
+        except ValueError:
+            day = None
+        if not day:
+            return "err", "날짜를 골라주세요."
+    paths = retro.forget_targets(None if everything else day)
+    what = "retro가 만든 파일 전부" if everything else f"{date} 기록"
+    if not paths:
+        return "err", f"지울 파일이 없습니다 ({what}).\n{retro.FORGET_NOTE}"
+    if form.get("confirm") != "1":
+        fields = [("scope", "all")] if everything else [("date", date)]
+        return ("warn", f"{what}: 아래 {len(paths)}개 파일을 지웁니다. 되돌릴 수 없습니다.\n"
+                + "\n".join(f"  {p}" for p in paths)
+                + (f"\n{retro.FORGET_KEPT}" if not everything else "") + f"\n{retro.FORGET_NOTE}",
+                ("/settings/forget", "정말 지우기", fields + [("confirm", "1")]))
+    ok, out = call(retro.cmd_forget, date=None if everything else date, all=everything, yes=True)
+    return ("ok" if ok else "err"), out
+
+
 ACTIONS = {"/run": act_run, "/settings/source": act_source, "/settings/host/add": act_host_add,
            "/settings/host/remove": act_host_remove, "/settings/repo/add": act_repo_add,
            "/settings/repo/remove": act_repo_remove, "/settings/repo/pick": act_repo_pick, "/settings/schedule": act_schedule,
-           "/settings/unschedule": act_unschedule}
+           "/settings/unschedule": act_unschedule, "/settings/alias/add": act_alias_add,
+           "/settings/alias/remove": act_alias_remove, "/settings/forget": act_forget}
 
 
 # ---------------------------------------------------------------- server
@@ -461,6 +579,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_page("설정", settings_body(flash))
         if url.path == "/status":
             return self.send(200, "application/json", json.dumps(s.job.snapshot(), ensure_ascii=False).encode())
+        if url.path == "/preview":
+            q = parse_qs(url.query)
+            return self.send_page("요약 미리보기", preview_body(q.get("kind", [""])[0], q.get("date", [""])[0]))
         if url.path.startswith("/file/"):
             return self.send_file(unquote(url.path[len("/file/"):]))
         self.send_text(404, "없는 페이지입니다.")

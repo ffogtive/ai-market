@@ -14,8 +14,12 @@ retro doctor                                       # 출처별 진단
 retro sources                                      # 무엇을 읽는지, 꺼진 소스
 retro off chrome / retro on chrome                 # 소스 끄기·켜기 (claude codex git chrome extension)
 retro add-repo ~/code                              # AI 세션 없이 커밋한 저장소도 수집 (저장소 또는 상위 폴더). 목록: retro repos, 빼기: retro remove-repo
+retro alias ai-market-2 "AI 마켓"                  # 폴더·레포 이름이 여러 개인 프로젝트를 한 이름으로 (웹사이트는 안 묶음). 목록: retro aliases, 풀기: retro alias --remove ai-market-2
+retro --preview                                    # 요약에 보낼 내용·글자 수·보낼 곳을 그대로 출력 (보내지 않고 페이지도 안 만듦). retro week --preview, --date도 됨
+retro forget --date 2026-09-23                     # 그날 retro가 만든 것(페이지·요약·메모)만 지움. 원본 기록은 그대로 (지울 파일을 보여주고 y/N 확인)
+retro forget --all                                 # ~/Retro에 retro가 만든 것 전부 지움 (--yes로 확인 생략). 무엇이 남는지는 PRIVACY.md "지우기"
 retro schedule --at 22:00                          # 매일 자동 실행 (맥), 끄기: retro unschedule
-retro app                                          # 명령어 없이 브라우저 화면에서: 회고 만들기 버튼 + 설정(소스·서버·저장소·자동 실행). 끄기: Ctrl+C
+retro app                                          # 명령어 없이 브라우저 화면에서: 회고 만들기 버튼 + 설정(소스·서버·저장소·프로젝트 이름 묶기·자동 실행·기록 삭제), 회고마다 "요약에 보내는 내용 보기". 끄기: Ctrl+C
 retro update                                       # 최신 버전으로
 ```
 

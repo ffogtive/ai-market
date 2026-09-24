@@ -30,15 +30,29 @@
 | Chrome 방문 기록 | Chrome 프로필의 `History` 파일 **복사본** | 원본을 잠그지 않도록 임시 폴더에 복사해 읽고 지움 |
 | YouTube | 사용자가 지정한 Google Takeout 파일(`--youtube`) | 지정할 때만 |
 | 다른 기기 | `retro add-host`로 등록한 ssh 호스트에서 같은 수집기 실행 | 사용자의 ssh 키 사용, 비밀번호 저장 안 함 |
-| 설정 화면 (`retro app`) | 새로 읽는 것 없음. 위 명령들과 같은 설정 파일·`~/Retro/daily-*.html`·`weekly-*.html`만 사용 | 이 컴퓨터(127.0.0.1)에서만 열리는 임시 서버. 실행할 때마다 새 무작위 토큰이 있어야 열리고, 다른 사이트의 요청은 거부. 외부로 보내는 것 없음, Ctrl+C로 종료 |
+| 설정 화면 (`retro app`) | 새로 읽는 것 없음. 위 명령들과 같은 설정 파일·`~/Retro/daily-*.html`·`weekly-*.html`, 그리고 마지막으로 모은 `~/Retro/events.jsonl`(프로젝트 이름 고르기·"요약에 보내는 내용 보기")만 사용 | 이 컴퓨터(127.0.0.1)에서만 열리는 임시 서버. 실행할 때마다 새 무작위 토큰이 있어야 열리고, 다른 사이트의 요청은 거부. 외부로 보내는 것 없음, Ctrl+C로 종료 |
 
-- **쓰는 곳:** `~/Retro/`(events.jsonl, daily-날짜.html, weekly-월요일날짜.html, index.html, retro.log, 요약 JSON), `~/.config/retro/config.json`(등록한 호스트), macOS 예약 실행 시 `~/Library/LaunchAgents/`.
+- **쓰는 곳:** `~/Retro/`(events.jsonl, daily-날짜.html, weekly-월요일날짜.html, index.html, retro.log, 요약 JSON), `~/.config/retro/config.json`(등록한 호스트·저장소·꺼진 소스·프로젝트 묶기), macOS 예약 실행 시 `~/Library/LaunchAgents/`. 지우는 법은 아래 "지우기".
 - **요약 저장:** Claude가 쓴 요약 결과(한 줄 요약·한 일·결정·학습 후보·KPT 초안 등)를 `~/Retro/summary-daily-날짜.json`·`summary-weekly-월요일날짜.json`에 저장합니다. 로그 원문은 넣지 않고, 로그가 바뀌었는지 비교할 해시(SHA-256)와 만든 시각·지시·커밋 수만 함께 둡니다(`--llm none`이면 지시·커밋 수만 — 목록 페이지용). 내 컴퓨터에만 남으며, 지우면 다음 실행 때 다시 요약합니다.
 - **숫자·분석(`analyze.py`):** 시간대별 활동, 연속 활동 구간, 기록상 프로젝트 변경, 문구 신호(자동 분류), 반복 요청, 작업 직전 탐색은 모두 이 컴퓨터에서 계산합니다. AI 요약을 켜면 LLM에는 전과 같은 프롬프트 줄(내가 입력한 지시·커밋 제목·방문 제목)에 더해 이 집계 숫자 몇 줄(600자 이내)과 반복 요청 문장 최대 5개(각 60자)가 함께 갑니다.
-- **요약(`render.py`):** 서술 요약이 필요할 때만 하루 타임라인을 **사용자 자신의 Anthropic 계정**으로 보냅니다(`ANTHROPIC_API_KEY` 또는 설치된 `claude -p`). 주간 요약에는 저장된 일간 요약도 함께 보냅니다. retro 서버를 거치지 않습니다. 로그가 그대로면 저장된 요약을 다시 쓰고 아무것도 보내지 않습니다. `--llm none`이면 외부 전송 없이 숫자만 계산합니다.
+- **요약(`render.py`):** 서술 요약이 필요할 때만 하루 타임라인을 **사용자 자신의 Anthropic 계정**으로 보냅니다(`ANTHROPIC_API_KEY` 또는 설치된 `claude -p`). 주간 요약에는 저장된 일간 요약도 함께 보냅니다. retro 서버를 거치지 않습니다. 로그가 그대로면 저장된 요약을 다시 쓰고 아무것도 보내지 않습니다. `--llm none`이면 외부 전송 없이 숫자만 계산합니다. **보내기 전에 확인:** `retro --preview`(아래 "전송 미리보기").
+- **프로젝트 이름 묶기:** `retro alias 폴더이름 "프로젝트 이름"`(또는 설정 화면)은 설정 파일에 `aliases`로 저장되고, 수집 직후 `events.jsonl`의 AI 지시·커밋 프로젝트 이름을 바꿉니다(원래 이름은 `project_raw`로 함께 남음). 요약에도 바꾼 이름이 갑니다. 웹사이트·YouTube 채널 이름은 묶지 않습니다.
 - **소스 끄기:** `retro sources`로 무엇을 읽는지 보고, `retro off <소스>`로 끕니다(`~/.config/retro/config.json`에 저장, 등록한 서버에도 적용). 수집 끄기는 기존 기록을 삭제하지 않습니다(이미 만든 `~/Retro/` 파일은 그대로). 꺼진 소스는 페이지의 "관측 범위"에 표시됩니다.
 - **하지 않는 것:** Keychain·브라우저 쿠키 읽기, 키 입력·화면 기록.
 - **권한:** Chrome 기록을 읽을 때 macOS가 터미널에 전체 디스크 접근 권한을 요구할 수 있습니다. 싫으면 `retro off chrome`(확장이 방문 기록을 대신 제공).
+
+### 지우기 (`retro forget`, 설정 화면 "기록 삭제")
+retro가 **만든 것**만 지웁니다. 원본 기록(Claude·Codex·git·Chrome)은 절대 건드리지 않으므로, 다시 `retro`를 실행하면 같은 날이 다시 만들어집니다. 수집 자체를 멈추려면 `retro off <소스>`. 터미널은 지울 파일을 보여주고 `y`를 받은 뒤에만 지웁니다(`--yes`로 생략). 설정 화면은 한 번 누르면 목록을 보여주고 "정말 지우기"를 한 번 더 눌러야 지웁니다. 지운 뒤 지운 파일 경로를 그대로 출력합니다.
+
+| 명령 | 지워지는 것 | 남는 것 |
+|---|---|---|
+| `retro forget --date 날짜` | `~/Retro/daily-날짜.html`, `summary-daily-날짜.json`, `notes-날짜.json`(있으면). 그 뒤 `index.html`과 이웃 페이지의 ← · → 링크를 다시 만들고, 그 주 주간 페이지에서 그날 링크를 뺌 | 그 주 주간 페이지·주간 요약(`weekly-*.html`, `summary-weekly-*.json` — 그날 숫자·요약이 섞여 있음), `events.jsonl`(마지막 수집 사본 — 다음 실행 때 덮어씀), 다른 날 파일 |
+| `retro forget --all` | `~/Retro`에서 retro가 쓴 파일 전부: 일간·주간 페이지, 요약 JSON, 메모(`notes-*.json`), `events.jsonl`, `index.html`(retro가 만든 것일 때만), `retro.log`, 쓰다 남은 임시 파일 | `~/Retro`의 다른 파일, 설정(`~/.config/retro/config.json`: 서버·저장소·꺼진 소스·프로젝트 묶기), 자동 실행(`retro unschedule`로 끔), 확장이 저장한 `~/Downloads/retro/browser-*.jsonl`(수집 소스) |
+| (둘 다) | — | **원본:** `~/.claude`, `~/.codex`, git 저장소, Chrome 기록, 등록한 서버의 기록 |
+
+### 전송 미리보기 (`retro --preview`, 설정 화면 "요약에 보내는 내용 보기")
+- `retro --preview [--date 날짜]`, `retro week --preview`: 평소처럼 기록을 모은 뒤(임시 파일에, `~/Retro`는 건드리지 않음) 요약에 보낼 **내용 전부**(보낼 기록 + retro가 붙이는 고정 지시문), 글자 수, 보낼 곳(Anthropic API / Claude Code / 없음)을 출력하고 멈춥니다. LLM을 부르지 않고 페이지·요약 파일도 만들지 않습니다. 저장된 요약이 같은 내용으로 만든 것이면 "지금 실행하면 보내지 않음"이라고 알려줍니다.
+- `retro app` 홈의 각 회고 옆 "요약에 보내는 내용 보기": 마지막으로 모은 `~/Retro/events.jsonl`로 같은 내용을 보여줍니다(새로 모으지 않음, 보내지 않음).
 
 ## 3. 브라우저 확장 (`extension/`)
 
