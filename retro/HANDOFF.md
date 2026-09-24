@@ -43,7 +43,7 @@
 3. **브라우저 확장 실계정 검증**(claude.ai·ChatGPT 웹/모바일 대화) — 클라우드 Claude Code 대화는 D안대로 커밋으로만 반영.
 4. (보류) **MCP 커넥터** 배포(`retro/mcp/deploy.sh`, 사용자 맥에서) → OAuth·디렉터리 심사. 클라우드 세션은 `api.cloudflare.com` 차단.
 
-운영 메모: 사용자는 비개발자(CLAUDE.md). **작업은 GPU 서버의 Remote Control 세션에서 직접 실행**(서버 `~/retro`에서 tmux 세션 `claude-rc`로 `claude remote-control --spawn=same-dir` 상시 실행, 설치·재실행은 `retro/tools/gpu_remote.sh` → Claude Code 앱에서 그 서버를 골라 세션 시작). 서버 세션은 코드 수정·테스트·푸시와 서버 쪽 수집(`python3 retro/collect.py --doctor`) 확인은 직접 할 수 있지만, 맥 전용(`~/Retro` 페이지, 22시 `retro schedule`, 맥 Chrome·Codex 기록, 맥의 `retro` 설치본 `~/.local/share/retro`)은 못 봄 — 그때만 맥에 복붙 한 줄. tmux가 꺼졌으면 맥에서: `ssh -t -p 10024 ffogtive@100.76.129.71 tmux attach -t claude-rc`. Codex 리뷰는 `retro/tools/codex_review.sh`를 GPU 서버에서(클라우드는 OpenAI 차단, 서버 Codex는 샌드박스가 안 돼 문서를 프롬프트에 넣음).
+운영 메모: 사용자는 비개발자(CLAUDE.md). **작업은 GPU 서버의 Remote Control 세션에서 직접 실행**(서버 `~/retro`에서 tmux 세션 `claude-rc`로 `claude remote-control --spawn=same-dir` 상시 실행, 설치·재실행은 `retro/tools/gpu_remote.sh` → Claude Code 앱에서 그 서버를 골라 세션 시작). 서버 세션은 코드 수정·테스트·푸시와 서버 쪽 수집(`python3 retro/collect.py --doctor`) 확인은 직접 할 수 있지만, 맥 전용(`~/Retro` 페이지, 22시 `retro schedule`, 맥 Chrome·Codex 기록, 맥의 `retro` 설치본 `~/.local/share/retro`)은 못 봄 — 그때만 맥에 복붙 한 줄. tmux가 꺼졌으면 맥에서: `ssh -t -p 10024 ffogtive@100.76.129.71 tmux attach -t claude-rc`. Codex 리뷰는 `retro/tools/codex_review.sh`를 GPU 서버에서(클라우드는 OpenAI 차단, 서버 Codex는 샌드박스가 안 돼 문서를 프롬프트에 넣음). 테스트는 서버 기본 python3이 3.6이므로 `retro/tools/test.sh`를 사용한다.
 
 ## 참고 (조사 결과는 대화 로그에)
 - 학생 앱 데이터 접근성 등급표, AI 커넥터별 자동화 가능성(Claude만 조건부 완전자동) — 이 세션 대화에 정리됨.
