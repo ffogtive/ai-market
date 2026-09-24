@@ -7,6 +7,7 @@ curl -fsSL https://raw.githubusercontent.com/ffogtive/ai-market/claude/eloquent-
 retro                                              # 오늘의 회고 → ~/Retro/daily-날짜.html 자동으로 열림
 retro add-host "ssh -p 10024 user@서버"            # 서버도 매번 함께 수집 (서버엔 아무것도 설치 안 함)
 retro --date 2026-09-23                            # 지난 날짜
+retro week                                         # 이번 주(월–일) 회고 → ~/Retro/weekly-월요일날짜.html (--date로 지난 주)
 retro doctor                                       # 출처별 진단
 retro sources                                      # 무엇을 읽는지, 꺼진 소스
 retro off chrome / retro on chrome                 # 소스 끄기·켜기 (claude codex git chrome extension)

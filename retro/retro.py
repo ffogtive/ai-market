@@ -2,10 +2,11 @@
 # requires-python = ">=3.10"
 # dependencies = ["anthropic>=1"]
 # ///
-"""retro — one command for a daily retrospective page.
+"""retro — one command for a daily (or weekly) retrospective page.
 
   retro                          today's page (collect this Mac + saved hosts, summarize, open)
   retro --date 2026-09-23        a specific day
+  retro week                     this week's page, Mon–Sun (--date 2026-09-23: that day's week)
   retro add-host "ssh -p 10024 me@100.76.129.71"   also collect from a server, every run
   retro hosts | remove-host NAME
   retro add-repo ~/code          also collect commits from repos here (a repo, or a folder of repos),
@@ -148,18 +149,16 @@ def counts(stderr):
 
 
 # ---------------------------------------------------------------- commands
-def cmd_run(args):
+def collect_all(day, days, no_chrome):
+    """This machine + browser extension + saved servers → ~/Retro/events.jsonl; returns its path."""
     cfg = load_config()
-    day = dt.date.fromisoformat(args.date) if args.date else dt.date.today()
-    days = (dt.date.today() - day).days + 7  # enough history for the 7-day chart
     os.makedirs(OUT_DIR, exist_ok=True)
-
     off = cfg.get("off", [])
     if off:
         print(f"· 꺼진 소스: {', '.join(off)} (켜기: retro on <소스>)", file=sys.stderr)
     ext_events = [] if "extension" in off else extension_events(day, days)
     # the extension already records browsing; reading Chrome's DB too would double count
-    events, err = collect_local(days, chrome=not args.no_chrome and not ext_events, off=off, extra=git_root_args(cfg))
+    events, err = collect_local(days, chrome=not no_chrome and not ext_events, off=off, extra=git_root_args(cfg))
     print(f"· 이 기기: {counts(err)}", file=sys.stderr)
     if ext_events:
         by = {}
@@ -176,14 +175,34 @@ def cmd_run(args):
     path = os.path.join(OUT_DIR, "events.jsonl")
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(json.dumps(e, ensure_ascii=False) + "\n" for e in events)
+    return path
 
-    out = os.path.join(OUT_DIR, f"daily-{day}.html")
-    argv = ["--date", str(day), "--llm", args.llm, "--out", out, path]
-    if render.main(argv) != 0:
+
+def render_and_open(argv, out, no_open):
+    if render.main(argv + ["--out", out]) != 0:
         return 1
-    if not args.no_open:
+    if not no_open:
         webbrowser.open("file://" + out)
     return 0
+
+
+def cmd_run(args):
+    day = dt.date.fromisoformat(args.date) if args.date else dt.date.today()
+    days = (dt.date.today() - day).days + 7  # enough history for the 7-day chart
+    path = collect_all(day, days, args.no_chrome)
+    return render_and_open(["--date", str(day), "--llm", args.llm, path],
+                           os.path.join(OUT_DIR, f"daily-{day}.html"), args.no_open)
+
+
+def cmd_week(args):
+    """Mon–Sun page for the week containing --date (default: this week)."""
+    today = dt.date.today()
+    day = dt.date.fromisoformat(args.date) if args.date else today
+    monday = render.week_days(day)[0]
+    end = min(monday + dt.timedelta(days=6), today)  # days after today have no logs yet
+    path = collect_all(end, max((today - monday).days, 0) + 1, args.no_chrome)
+    return render_and_open(["--week", "--date", str(day), "--llm", args.llm, path],
+                           os.path.join(OUT_DIR, f"weekly-{monday}.html"), args.no_open)
 
 
 def cmd_add_host(args):
@@ -336,14 +355,21 @@ def cmd_doctor(args):
     return 0
 
 
+def page_options(p, sub=False):
+    # on a subcommand, SUPPRESS keeps `retro --date X week` from being reset to the defaults
+    keep = argparse.SUPPRESS if sub else None
+    p.add_argument("--date", default=keep, help="YYYY-MM-DD (default: today)")
+    p.add_argument("--llm", default=keep or "auto", choices=["auto", "api", "claude", "none"],
+                   help="summary backend (auto: API key → claude CLI → numbers only)")
+    p.add_argument("--no-chrome", action="store_true", default=keep or False)
+    p.add_argument("--no-open", action="store_true", default=keep or False, help="don't open the page in a browser")
+
+
 def main():
     p = argparse.ArgumentParser(prog="retro", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd")
-    p.add_argument("--date", help="YYYY-MM-DD (default: today)")
-    p.add_argument("--llm", default="auto", choices=["auto", "api", "claude", "none"],
-                   help="summary backend (auto: API key → claude CLI → numbers only)")
-    p.add_argument("--no-chrome", action="store_true")
-    p.add_argument("--no-open", action="store_true", help="don't open the page in a browser")
+    page_options(p)
+    page_options(sub.add_parser("week", help="this week's page (Mon–Sun)"), sub=True)
     a = sub.add_parser("add-host", help="collect from a server too")
     a.add_argument("ssh", help='e.g. "ssh -p 10024 me@100.76.129.71"')
     sub.add_parser("hosts")
@@ -363,7 +389,7 @@ def main():
     sc.add_argument("--at", default="22:00", help="HH:MM (default 22:00)")
     sub.add_parser("unschedule")
     args = p.parse_args()
-    handler = {"add-host": cmd_add_host, "hosts": cmd_hosts, "remove-host": cmd_remove_host,
+    handler = {"week": cmd_week, "add-host": cmd_add_host, "hosts": cmd_hosts, "remove-host": cmd_remove_host,
                "doctor": cmd_doctor, "add-repo": cmd_add_repo, "repos": cmd_repos, "remove-repo": cmd_remove_repo, "sources": cmd_sources, "off": cmd_toggle, "on": cmd_toggle, "schedule": cmd_schedule, "unschedule": cmd_unschedule}.get(args.cmd, cmd_run)
     sys.exit(handler(args))
 
