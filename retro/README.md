@@ -104,3 +104,9 @@ open retro_out/daily-2026-09-23.html
 - 저장 위치: `~/Downloads/retro/browser-날짜.jsonl` → `retro`가 자동으로 합침 (이 파일이 있으면 Chrome DB는 읽지 않아 권한 문제도 사라짐)
 - 수집 범위: 팝업에서 "제목 + 내 질문" / "제목만" 선택. 외부 서버 전송 없음
 - ChatGPT·Claude는 공식 기록 API가 없어 웹앱 내부 엔드포인트를 사용 → 서비스 변경 시 해당 항목만 "실패"로 표시되고 나머지는 계속 수집
+
+## 테스트
+
+```bash
+retro/tools/test.sh
+```
