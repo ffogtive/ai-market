@@ -18,6 +18,7 @@
   retro off chrome | on chrome   turn a source off/on (claude codex git chrome extension)
   retro doctor                   check every source and the summary backend
   retro schedule --at 22:00      open the page automatically every day (macOS)
+  retro app                      buttons and settings in a browser page (this machine only)
   retro --llm none               numbers only (no log text leaves this machine)
 
 Run through `uv run`, so the system Python version does not matter. Servers
@@ -362,6 +363,12 @@ def cmd_doctor(args):
     return 0
 
 
+def cmd_app(args):
+    """Local web page with the same commands as buttons (see app.py)."""
+    import app
+    return app.serve(open_browser=not args.no_open)
+
+
 def page_options(p, sub=False):
     # on a subcommand, SUPPRESS keeps `retro --date X week` from being reset to the defaults
     keep = argparse.SUPPRESS if sub else None
@@ -397,8 +404,9 @@ def main():
     sc = sub.add_parser("schedule", help="run every day (macOS)")
     sc.add_argument("--at", default="22:00", help="HH:MM (default 22:00)")
     sub.add_parser("unschedule")
+    sub.add_parser("app", help="buttons and settings in a browser page (this machine only)")
     args = p.parse_args()
-    handler = {"week": cmd_week, "add-host": cmd_add_host, "hosts": cmd_hosts, "remove-host": cmd_remove_host,
+    handler = {"week": cmd_week, "app": cmd_app, "add-host": cmd_add_host, "hosts": cmd_hosts, "remove-host": cmd_remove_host,
                "doctor": cmd_doctor, "add-repo": cmd_add_repo, "repos": cmd_repos, "remove-repo": cmd_remove_repo, "sources": cmd_sources, "off": cmd_toggle, "on": cmd_toggle, "schedule": cmd_schedule, "unschedule": cmd_unschedule}.get(args.cmd, cmd_run)
     sys.exit(handler(args))
 
