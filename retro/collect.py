@@ -368,7 +368,7 @@ def doctor(args, author):
           f"history.jsonl={os.path.isfile(os.path.join(codex_root, 'history.jsonl'))}")
     repos = git_repos(dt.datetime.now(LOCAL_TZ), args.git_root, args.git_depth)
     scan = f" + scan of {args.git_root} (depth {args.git_depth})" if args.git_root else ""
-    print(f"git      {len(repos)} repos from AI sessions (last {REPO_LOOKBACK_DAYS} days){scan}, author={author!r}")
+    print(f"git      {len(repos)} repos: AI sessions (last {REPO_LOOKBACK_DAYS} days){scan}, author={author!r}")
     for r in repos[:15]:
         out = run(["git", "log", "--all", "-1", "--pretty=%at %ae"], cwd=r).stdout.split()
         last = f"{parse_ts(int(out[0])):%Y-%m-%d %H:%M} {out[1]}" if out and out[0].isdigit() else ""
