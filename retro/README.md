@@ -43,7 +43,7 @@ python3 retro/collect.py --doctor   # 각 출처를 어디서 찾는지, 파일�
 | 출처 | 읽는 위치 | 비고 |
 |---|---|---|
 | Claude Code | `~/.claude/projects/*/*.jsonl` | 내가 입력한 프롬프트만 (시스템 메시지 제외) |
-| Codex | `~/.codex/sessions/**`, `~/.codex/history.jsonl` | 중복 제거 |
+| Codex | `~/.codex/sessions/**`, `~/.codex/archived_sessions/`, `~/.codex/history.jsonl` | 중복 제거 |
 | git | 최근 30일 Claude Code·Codex 세션의 작업 폴더(`cwd`)가 속한 레포 | 홈 폴더를 훑지 않음. AI 없이 커밋한 저장소는 `retro add-repo DIR`로 추가(저장소 또는 상위 폴더, 깊이 4). 봇 커밋 제외, 작성자 제한은 `--git-author` |
 | Chrome | `~/Library/Application Support/Google/Chrome/*/History` | 로컬 방문 기록 (Takeout 불필요). 끄려면 `--no-chrome` |
 | YouTube | Takeout `watch-history.json`(권장) 또는 `.html` | 광고 시청 기록 제외 |
