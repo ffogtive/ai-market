@@ -1,6 +1,6 @@
-# retro — 진행 상황
+# retro — 진행 상황 (2026-09-24)
 
-> 저장소 이름: `ffogtive/ai-market` → **`ffogtive/retro`** (9/24 사용자 결정. GitHub가 옛 주소를 새 주소로 넘겨줌) (2026-09-24)
+> 저장소 이름: `ffogtive/ai-market` → **`ffogtive/retro`** (9/24 사용자 결정. GitHub가 옛 주소를 새 주소로 넘겨줌)
 
 하루 활동 로그를 모아 노션 스타일 일간·주간 **회고 페이지**를 만드는 제품. 직장인·학생 공용 엔진(수집 → 라벨 → 숫자 계산 → LLM 요약 → HTML).
 
