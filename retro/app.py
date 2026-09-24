@@ -478,7 +478,8 @@ def followup_body(day):
         if text:
             cur = notes.status(n, item)
             buttons = "".join(status_form(day, d, item, v, cur) for v in notes.STATUSES)
-            rows += (f'<div class="row"><div class="grow check"><b>{e(label)}</b><div>{e(text)}</div>'
+            ai = ' <span class="muted">(AI 제안 — 저장한 적 없음)</span>' if notes.is_ai(n, item) else ""
+            rows += (f'<div class="row"><div class="grow check"><b>{e(label)}</b><div>{e(text)}{ai}</div>'
                      f'<div class="muted">지금: {e(cur or notes.UNCHECKED)}</div></div><div class="actions">{buttons}</div></div>')
     return (f'<section><h2>↩️ 지난 회고 확인</h2>{rows}<p class="muted">이어가기를 누르면 아래 ‘내일 첫 할 일’(Try는 Try 칸)의 '
             '기본값으로 가져옵니다. 결과는 그날 페이지와 주간 페이지에 표시됩니다.</p></section>')
