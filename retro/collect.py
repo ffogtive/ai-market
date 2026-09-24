@@ -37,7 +37,9 @@ def parse_ts(value):
             if value > 1e12:
                 value /= 1000
             return dt.datetime.fromtimestamp(value, dt.timezone.utc).astimezone(LOCAL_TZ)
-        s = str(value).strip().replace("Z", "+00:00")
+        s = str(value).strip().replace("Z", "+00:00").replace(" ", "T", 1)
+        # Python <3.11 accepts only 3 or 6 fractional digits
+        s = re.sub(r"\.(\d+)", lambda m: "." + (m.group(1) + "000000")[:6], s, count=1)
         d = dt.datetime.fromisoformat(s)
         if d.tzinfo is None:
             d = d.replace(tzinfo=dt.timezone.utc)
@@ -123,7 +125,11 @@ def collect_codex(since, until):
         if dt.datetime.fromtimestamp(os.path.getmtime(path), LOCAL_TZ) < since:
             continue
         cwd = ""
+        file_ts = None  # older formats only timestamp the first line
         for rec in read_jsonl(path):
+            if file_ts is None:
+                pl = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
+                file_ts = parse_ts(rec.get("timestamp") or pl.get("timestamp"))
             payload = rec.get("payload") if isinstance(rec.get("payload"), dict) else rec
             kind = rec.get("type")
             if kind == "session_meta" or "cwd" in payload:
@@ -131,15 +137,14 @@ def collect_codex(since, until):
             text = ""
             if kind == "event_msg" and payload.get("type") == "user_message":
                 text = payload.get("message", "")
-            elif payload.get("type") == "message" and payload.get("role") == "user" and kind != "response_item":
-                # older rollout format: bare message items, no wrapper
+            elif payload.get("type") == "message" and payload.get("role") == "user":
                 text = text_of(payload.get("content"))
             if is_noise(text):
                 continue
-            ts = parse_ts(rec.get("timestamp") or payload.get("timestamp"))
+            ts = parse_ts(rec.get("timestamp") or payload.get("timestamp")) or file_ts
             if not ts or not (since <= ts < until):
                 continue
-            key = (ts.isoformat()[:19], clip(text, 60))
+            key = (ts.isoformat()[:16], clip(text, 60))
             if key in seen:
                 continue
             seen.add(key)
@@ -150,7 +155,7 @@ def collect_codex(since, until):
         text = rec.get("text", "")
         if not ts or not (since <= ts < until) or is_noise(text):
             continue
-        key = (ts.isoformat()[:19], clip(text, 60))
+        key = (ts.isoformat()[:16], clip(text, 60))
         if key not in seen:
             seen.add(key)
             out.append(event("codex", ts, text))
@@ -182,7 +187,7 @@ def collect_git(since, until, roots, max_depth, author):
             cmd = [
                 "git", "-C", repo, "log", "--all", "--no-merges",
                 f"--since={since.isoformat()}", f"--until={until.isoformat()}",
-                "--pretty=format:%x1e%aI%x1f%s", "--shortstat",
+                "--pretty=format:%x1e%aI %ae%x1f%s", "--shortstat",
             ]
             if author:
                 cmd.append(f"--author={author}")
@@ -191,11 +196,13 @@ def collect_git(since, until, roots, max_depth, author):
             except (OSError, subprocess.TimeoutExpired):
                 continue
             for chunk in res.stdout.split("\x1e"):
+                if "[bot]" in chunk.split("\x1f")[0] or "github-actions" in chunk.split("\x1f")[0]:
+                    continue
                 if "\x1f" not in chunk:
                     continue
                 head, _, stat = chunk.partition("\n")
-                iso, _, subject = head.partition("\x1f")
-                ts = parse_ts(iso)
+                meta, _, subject = head.partition("\x1f")
+                ts = parse_ts(meta.split(" ")[0])
                 if not ts:
                     continue
                 stat = stat.strip()
@@ -366,17 +373,42 @@ def _youtube_html(path, since, until):
 
 
 # ---------------------------------------------------------------- output
-def write_outputs(events, out_dir):
-    os.makedirs(out_dir, exist_ok=True)
-    events.sort(key=lambda e: e["ts"])
-    with open(os.path.join(out_dir, "events.jsonl"), "w", encoding="utf-8") as f:
-        for e in events:
-            f.write(json.dumps({**e, "ts": e["ts"].isoformat()}, ensure_ascii=False) + "\n")
+GROUP_GAP = dt.timedelta(minutes=15)
 
+
+def group_runs(items):
+    """Merge consecutive browsing on the same site into one line (chrome/youtube only)."""
+    runs = []
+    for e in items:
+        last = runs[-1] if runs else None
+        if (last and e["source"] in ("chrome", "youtube") and last[0]["source"] == e["source"]
+                and last[0]["project"] == e["project"] and e["ts"] - last[-1]["ts"] <= GROUP_GAP):
+            last.append(e)
+        else:
+            runs.append([e])
+    return runs
+
+
+def format_run(run):
+    first, lastev = run[0], run[-1]
+    proj = f"[{first['project']}] " if first["project"] else ""
+    if len(run) == 1:
+        return f"- {first['ts']:%H:%M} **{first['source']}** {proj}{first['text']}"
+    titles = []
+    for e in run:
+        t = clip(e["text"], 70)
+        if t not in titles and not t.startswith("http"):
+            titles.append(t)
+    shown = " · ".join(titles[:4]) or clip(first["text"], 70)
+    more = f" 외 {len(titles) - 4}" if len(titles) > 4 else ""
+    return (f"- {first['ts']:%H:%M}–{lastev['ts']:%H:%M} **{first['source']}** {proj}"
+            f"×{len(run)}: {shown}{more}")
+
+
+def render_timeline(events):
     by_day = defaultdict(list)
     for e in events:
         by_day[e["ts"].strftime("%Y-%m-%d (%a)")].append(e)
-
     lines = ["# Activity timeline", ""]
     for day, items in by_day.items():
         counts = defaultdict(int)
@@ -384,12 +416,23 @@ def write_outputs(events, out_dir):
             counts[e["source"]] += 1
         summary = ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
         lines += [f"## {day} — {summary}", ""]
-        for e in items:
-            proj = f"[{e['project']}] " if e["project"] else ""
-            lines.append(f"- {e['ts']:%H:%M} **{e['source']}** {proj}{e['text']}")
+        lines += [format_run(r) for r in group_runs(items)]
         lines.append("")
+    return "\n".join(lines)
+
+
+def write_outputs(events, out_dir, to_stdout=False):
+    events.sort(key=lambda e: e["ts"])
+    timeline = render_timeline(events)
+    if to_stdout:
+        print(timeline)
+        return
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, "events.jsonl"), "w", encoding="utf-8") as f:
+        for e in events:
+            f.write(json.dumps({**e, "ts": e["ts"].isoformat()}, ensure_ascii=False) + "\n")
     with open(os.path.join(out_dir, "timeline.md"), "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+        f.write(timeline)
 
 
 def main():
@@ -398,23 +441,18 @@ def main():
     p.add_argument("--git-root", action="append", help="directory to scan for repos (repeatable, default ~)")
     p.add_argument("--git-depth", type=int, default=4, help="max directory depth for repo scan")
     p.add_argument("--git-author", default=None,
-                   help="author filter (default: global git user.email; pass '' for all authors)")
+                   help="only commits whose author matches (default: all authors except bots)")
     p.add_argument("--youtube", help="path to Takeout watch-history.json or watch-history.html")
     p.add_argument("--out", default="retro_out")
     p.add_argument("--no-chrome", action="store_true", help="skip local Chrome history")
+    p.add_argument("--stdout", action="store_true", help="print timeline to stdout instead of files (for ssh)")
     p.add_argument("--doctor", action="store_true", help="show where each source looks and what it finds")
     args = p.parse_args()
 
     until = dt.datetime.now(LOCAL_TZ)
     since = (until - dt.timedelta(days=args.days)).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    author = args.git_author
-    if author is None:
-        try:
-            author = subprocess.run(["git", "config", "--global", "user.email"],
-                                    capture_output=True, text=True).stdout.strip() or None
-        except OSError:
-            author = None
+    author = args.git_author or None
 
     if args.doctor:
         doctor(args, author)
@@ -432,7 +470,9 @@ def main():
         print(f"{name:8} {len(got):5} events", file=sys.stderr)
         events += got
 
-    write_outputs(events, args.out)
+    write_outputs(events, args.out, args.stdout)
+    if args.stdout:
+        return
     print(f"\nwrote {len(events)} events -> {args.out}/timeline.md", file=sys.stderr)
 
 
