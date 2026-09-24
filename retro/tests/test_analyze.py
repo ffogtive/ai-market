@@ -246,13 +246,6 @@ class BehaviorTest(unittest.TestCase):
         self.assertEqual(b["by_slice"], {"am": 3, "pm": 3})
         self.assertEqual(b["by_part"], {"심야": 1, "오전": 2, "오후": 1, "저녁": 2})
 
-    def test_facts_hide_the_switch_count(self):
-        """A real weekly summary turned "전환 73회" into "컨텍스트가 계속 끊김" — so the LLM never sees the count."""
-        events = self.busy()
-        facts = an.facts_for_llm(an.prompt_behavior(events), an.work_rhythm(events))
-        self.assertNotIn("프로젝트 변경", facts)
-        self.assertIn("동시 프로젝트", facts)  # the neutral one stays
-
     def test_no_prompts(self):
         b = an.prompt_behavior([ev(at(0), "git", "x", "shop")])
         self.assertEqual((b["count"], b["length_median"], b["paste_ratio"], b["first"]), (0, 0, 0.0, None))
@@ -393,6 +386,13 @@ class FactsTest(unittest.TestCase):
         self.assertIn("연속 활동 구간", facts)  # trimming drops the tail (repeated requests) first
         self.assertTrue(facts.endswith("(일부 생략)"), facts)  # …and says so
         self.assertLessEqual(len(an.facts_for_llm(b, r, limit=80)), 80)
+
+    def test_facts_hide_the_switch_count(self):
+        """A real weekly summary turned "전환 73회" into "컨텍스트가 계속 끊김" — so the LLM never sees the count."""
+        events = self.busy()
+        facts = an.facts_for_llm(an.prompt_behavior(events), an.work_rhythm(events))
+        self.assertNotIn("프로젝트 변경", facts)
+        self.assertIn("동시 프로젝트", facts)  # the neutral one stays
 
     def test_no_prompts(self):
         facts = an.facts_for_llm(an.prompt_behavior([]), an.work_rhythm([]))
