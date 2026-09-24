@@ -4,7 +4,7 @@
 #   ssh SERVER 'curl -fsSL <raw url of this file> | bash -l -s'
 set -e
 BR="${RETRO_BRANCH:-claude/quirky-hamilton-8p2uv6}"
-RAW="https://raw.githubusercontent.com/ffogtive/ai-market/$BR/retro"
+RAW="https://raw.githubusercontent.com/ffogtive/retro/$BR/retro"
 D="$(mktemp -d)"
 cd "$D"
 for f in PLAN-template.md HANDOFF.md PRIVACY.md; do curl -fsSL "$RAW/$f" -o "$f"; done
