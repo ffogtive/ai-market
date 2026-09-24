@@ -1,8 +1,8 @@
 #!/bin/sh
 # retro installer — one line, no Python setup needed:
-#   curl -fsSL https://raw.githubusercontent.com/ffogtive/ai-market/claude/eloquent-brahmagupta-2mkg25/retro/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ffogtive/retro/claude/eloquent-brahmagupta-2mkg25/retro/install.sh | sh
 set -e
-REPO="https://github.com/ffogtive/ai-market"
+REPO="https://github.com/ffogtive/retro"
 BRANCH="${RETRO_BRANCH:-claude/eloquent-brahmagupta-2mkg25}"
 DIR="$HOME/.local/share/retro"
 BIN="$HOME/.local/bin"

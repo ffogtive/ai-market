@@ -3,7 +3,7 @@
 ## 설치 (한 줄, Python 설정 불필요)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ffogtive/ai-market/claude/eloquent-brahmagupta-2mkg25/retro/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ffogtive/retro/claude/eloquent-brahmagupta-2mkg25/retro/install.sh | sh
 retro                                              # 오늘의 회고 → ~/Retro/daily-날짜.html 자동으로 열림
 retro add-host "ssh -p 10024 user@서버"            # 서버도 매번 함께 수집 (서버엔 아무것도 설치 안 함)
 retro --date 2026-09-23                            # 지난 날짜
