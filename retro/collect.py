@@ -433,6 +433,8 @@ def collect_chrome(since, until):
                 continue
         last = None
         for usec, title, url in rows:
+            if not re.match(r"https?://", url or ""):  # file:, chrome:// — incl. the retro pages themselves
+                continue
             host = re.sub(r"^https?://(www\.)?", "", url or "").split("/")[0]
             label = title or url
             if (host, label) == last:  # collapse reloads / redirects of the same page
