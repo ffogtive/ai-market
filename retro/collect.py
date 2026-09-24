@@ -3,7 +3,7 @@
 
 Sources (all read-only, all local):
   - Claude Code transcripts   ~/.claude/projects/*/*.jsonl
-  - Codex CLI sessions        ~/.codex/sessions/**/*.jsonl, ~/.codex/history.jsonl
+  - Codex CLI sessions        ~/.codex/{sessions,archived_sessions}/**/*.jsonl, ~/.codex/history.jsonl
   - git commits               repos the user opened a Claude Code / Codex session in
                               (last 30 days); --git-root adds a directory scan
   - YouTube watch history     Google Takeout watch-history.json or .html (--youtube)
@@ -119,10 +119,14 @@ def is_noise(text):
 
 
 def strip_attachments(text):
-    """Codex prefixes pasted files as '# Files mentioned by the user: ...'; keep only the request."""
-    if text.lstrip().startswith("# Files mentioned by the user"):
+    """Codex prefixes context blocks ('# Files mentioned by the user', '# Context from my IDE setup')
+    before '## My request for Codex:'; keep only the request."""
+    head = text.lstrip()
+    if head.startswith("# Files mentioned by the user"):
         m = re.search(r"##\s*My request for Codex:?\s*(.*)", text, re.S)
         return ("[첨부] " + m.group(1)) if m else "[첨부 파일]"
+    if head.startswith("# ") and "## My request for Codex:" in text:
+        return text.rsplit("## My request for Codex:", 1)[1].strip()
     return text
 
 
@@ -150,39 +154,115 @@ def collect_claude(since, until):
 
 
 # ---------------------------------------------------------------- Codex CLI
+# Rollout files: ~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl, one
+# {timestamp, type, payload} record per line. Archiving a thread moves its file
+# to ~/.codex/archived_sessions/ (flat).
+CODEX_SESSION_DIRS = ("sessions", "archived_sessions")
+# user-role context Codex injects that does not start with '<'
+CODEX_NOISE_PREFIXES = ("# AGENTS.md instructions",)
+
+
+def codex_session_files():
+    root = os.path.expanduser("~/.codex")
+    paths = []
+    for sub in CODEX_SESSION_DIRS:
+        paths += glob.glob(os.path.join(root, sub, "**", "*.jsonl"), recursive=True)
+    # names start with the creation time, so a forked thread's parent is read first
+    return sorted(paths, key=os.path.basename)
+
+
+def codex_actor(meta):
+    """Threads another program drove (codex exec, MCP, sub-agents, reviewers) are not the user typing."""
+    src = meta.get("source")
+    if isinstance(src, dict):  # {"subagent": ...} / {"internal": ...}; {"custom": ...} is a client app
+        return "human" if "custom" in src else "agent"
+    if src in ("exec", "mcp") or meta.get("thread_source") in ("subagent", "guardian_review", "memory_consolidation"):
+        return "agent"
+    return "human"
+
+
+def codex_user_text(payload):
+    """Text of a response_item user message without the context blocks Codex injects."""
+    content = payload.get("content")
+    kinds = (payload.get("internal_chat_message_metadata_passthrough") or {}).get("content_item_kinds")
+    if isinstance(content, list) and isinstance(kinds, list) and len(kinds) == len(content):
+        # newer Codex tags each block: user.text / user.image vs agents_md.instructions, ...
+        content = [c for c, k in zip(content, kinds) if str(k).startswith("user.")]
+    return text_of(content)
+
+
+def codex_prompts(path):
+    """(meta, [(ts, text, cwd)]) for the prompts in one rollout file, injected context removed."""
+    meta, cwd, file_ts = {}, "", None  # older formats only timestamp the first line
+    found = []  # (ts, text, cwd, is_user_event)
+    for rec in read_jsonl(path):
+        pl = rec.get("payload") if isinstance(rec.get("payload"), dict) else None
+        payload = rec if pl is None else pl  # oldest format: bare records, no envelope
+        if file_ts is None:
+            file_ts = parse_ts(rec.get("timestamp") or payload.get("timestamp"))
+        kind, ptype = rec.get("type"), payload.get("type")
+        if kind == "session_meta" and not meta:
+            meta = payload
+        if kind == "session_meta" or "cwd" in payload:
+            cwd = payload.get("cwd") or cwd
+        # a sub-agent thread starts with a copy of its parent's history
+        if isinstance(rec.get("ordinal"), int) and rec["ordinal"] < (meta.get("subagent_history_start_ordinal") or 0):
+            continue
+        ts = parse_ts(rec.get("timestamp") or payload.get("timestamp")) or file_ts
+        item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+        text, is_event = None, True
+        if kind == "event_msg" and ptype == "user_message":  # legacy history mode
+            text = payload.get("message", "")
+        elif kind == "event_msg" and ptype == "item_completed" and item.get("type") == "UserMessage":  # paginated
+            text = text_of(item.get("content"))
+        elif kind == "realtime_item" and ptype == "transcript_segment" and payload.get("role") == "user":
+            text = payload.get("text", "")
+            text = ("[음성] " + text) if text.strip() else ""
+        elif ptype == "message" and payload.get("role") == "user":
+            # model input; the only copy of a prompt when no user event was written
+            if (rec.get("metadata") or {}).get("inherited_user_message"):
+                continue
+            text, is_event = codex_user_text(payload), False
+        if text is None:
+            continue
+        text = strip_attachments(text)
+        if is_noise(text) or text.lstrip().startswith(CODEX_NOISE_PREFIXES):
+            continue
+        found.append((ts, text, cwd, is_event))
+    events = [(ts, text) for ts, text, _, is_event in found if is_event and ts]
+    out = []
+    for ts, text, cwd, is_event in found:
+        # the model-input copy of a prompt sits right next to its user event
+        if not is_event and ts and any(t == text and abs((ts - ets).total_seconds()) < 60 for ets, t in events):
+            continue
+        out.append((ts, text, cwd))
+    return meta, out
+
+
 def collect_codex(since, until):
     out = []
     seen = set()
+    texts = set()
     root = os.path.expanduser("~/.codex")
-    for path in glob.glob(os.path.join(root, "sessions", "**", "*.jsonl"), recursive=True):
-        if dt.datetime.fromtimestamp(os.path.getmtime(path), LOCAL_TZ) < since:
-            continue
-        cwd = ""
-        file_ts = None  # older formats only timestamp the first line
-        for rec in read_jsonl(path):
-            if file_ts is None:
-                pl = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
-                file_ts = parse_ts(rec.get("timestamp") or pl.get("timestamp"))
-            payload = rec.get("payload") if isinstance(rec.get("payload"), dict) else rec
-            kind = rec.get("type")
-            if kind == "session_meta" or "cwd" in payload:
-                cwd = payload.get("cwd") or cwd
-            text = ""
-            if kind == "event_msg" and payload.get("type") == "user_message":
-                text = payload.get("message", "")
-            elif payload.get("type") == "message" and payload.get("role") == "user":
-                text = text_of(payload.get("content"))
-            text = strip_attachments(text)
-            if is_noise(text):
+    for path in codex_session_files():
+        try:
+            if dt.datetime.fromtimestamp(os.path.getmtime(path), LOCAL_TZ) < since:
                 continue
-            ts = parse_ts(rec.get("timestamp") or payload.get("timestamp")) or file_ts
+        except OSError:
+            continue
+        meta, prompts = codex_prompts(path)
+        actor = codex_actor(meta)
+        # a fork re-writes the parent's prompts with the fork's own timestamps
+        inherited = set(texts) if (meta.get("forked_from_id") or meta.get("parent_thread_id")) else set()
+        for ts, text, cwd in prompts:
             if not ts or not (since <= ts < until):
                 continue
             key = (ts.isoformat()[:16], clip(text, 60))
-            if key in seen:
+            if key in seen or clip(text, 60) in inherited:
                 continue
             seen.add(key)
-            out.append(event("codex", ts, text, os.path.basename(cwd)))
+            texts.add(clip(text, 60))
+            out.append(event("codex", ts, text, os.path.basename(cwd), actor))
     # history.jsonl covers prompts even when session files are gone
     for rec in read_jsonl(os.path.join(root, "history.jsonl")):
         ts = parse_ts(rec.get("ts"))
@@ -234,7 +314,7 @@ def session_repos(since):
     """
     cutoff = (since - dt.timedelta(days=REPO_LOOKBACK_DAYS)).timestamp()
     paths = glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl"))
-    paths += glob.glob(os.path.expanduser("~/.codex/sessions/**/*.jsonl"), recursive=True)
+    paths += codex_session_files()
     dirs = set()
     for path in paths:
         try:
@@ -364,8 +444,11 @@ def doctor(args, author):
         print(f"         note: CLAUDE_CONFIG_DIR={os.environ['CLAUDE_CONFIG_DIR']}")
     codex_root = os.path.expanduser("~/.codex")
     print(f"codex    {codex_root} exists={os.path.isdir(codex_root)}  "
-          f"{newest(glob.glob(os.path.join(codex_root, 'sessions', '**', '*.jsonl'), recursive=True))}  "
+          f"{newest(codex_session_files())}  "
           f"history.jsonl={os.path.isfile(os.path.join(codex_root, 'history.jsonl'))}")
+    zst = glob.glob(os.path.join(codex_root, "*sessions", "**", "*.jsonl.zst"), recursive=True)
+    if zst:  # local_thread_store_compression; not read (zstd is not in the standard library)
+        print(f"         note: {len(zst)} compressed .jsonl.zst sessions skipped")
     repos = git_repos(dt.datetime.now(LOCAL_TZ), args.git_root, args.git_depth)
     scan = f" + scan of {args.git_root} (depth {args.git_depth})" if args.git_root else ""
     print(f"git      {len(repos)} repos: AI sessions (last {REPO_LOOKBACK_DAYS} days){scan}, author={author!r}")
