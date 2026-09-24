@@ -343,9 +343,25 @@ def git_repos(since, roots, max_depth):
     return sorted(repos)
 
 
-def collect_git(since, until, repos, author):
+def fetch_repo(repo):
+    """Commits pushed from elsewhere (cloud sessions, other machines) only show up after a fetch.
+
+    Read-only, from the repo's own remotes; never prompts for a password, and a
+    failure (offline, no access) just leaves the local refs as they are.
+    """
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10")
+    try:
+        subprocess.run(["git", "fetch", "--quiet", "--all"], cwd=repo, env=env, timeout=30,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def collect_git(since, until, repos, author, fetch=True):
     out = []
     for repo in repos:
+        if fetch:
+            fetch_repo(repo)
         cmd = [
             "git", "log", "--all", "--no-merges",
             f"--since={int(since.timestamp())}", f"--until={int(until.timestamp())}",
@@ -627,6 +643,7 @@ def main():
     p.add_argument("--git-root", action="append",
                    help="also scan this directory for repos (repeatable; default: no scan, only repos from AI sessions)")
     p.add_argument("--git-depth", type=int, default=4, help="max directory depth for repo scan")
+    p.add_argument("--no-fetch", action="store_true", help="don't git fetch repos before reading commits")
     p.add_argument("--git-author", default=None,
                    help="only commits whose author matches (default: all authors except bots)")
     p.add_argument("--youtube", help="path to Takeout watch-history.json or watch-history.html")
@@ -651,7 +668,7 @@ def main():
     for name, fn in [
         ("claude", lambda: collect_claude(since, until)),
         ("codex", lambda: collect_codex(since, until)),
-        ("git", lambda: collect_git(since, until, git_repos(since, args.git_root, args.git_depth), author)),
+        ("git", lambda: collect_git(since, until, git_repos(since, args.git_root, args.git_depth), author, not args.no_fetch)),
         ("youtube", lambda: collect_youtube(args.youtube, since, until)),
         ("chrome", lambda: collect_chrome(since, until)),
     ]:
