@@ -390,12 +390,7 @@ def main(argv=None):
 
     summary = None
     backend = None if args.no_llm else pick_backend(args.llm)
-    if backend == "claude":
-        try:
-            summary = summarize_cli(day, events, stats)
-        except (OSError, RuntimeError, subprocess.TimeoutExpired) as e:
-            print(f"summary failed ({e}) — rendering numbers only", file=sys.stderr)
-    elif backend == "api":
+    if backend == "api":
         try:
             import anthropic
         except ImportError:
@@ -415,6 +410,15 @@ def main(argv=None):
                 print(f"API error {e.status_code}: {e.message}", file=sys.stderr)
             except (RuntimeError, ValueError) as e:  # refusal / truncation / bad JSON
                 print(f"summary unusable: {e}", file=sys.stderr)
+        # auto: a stale or invalid API key shouldn't cost the summary when Claude Code is installed
+        if not summary and args.llm == "auto" and shutil.which("claude"):
+            print("· API 요약 실패 → claude CLI로 재시도", file=sys.stderr)
+            backend = "claude"
+    if backend == "claude":
+        try:
+            summary = summarize_cli(day, events, stats)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as e:
+            print(f"summary failed ({e}) — rendering numbers only", file=sys.stderr)
     print(f"· 요약: {backend or '없음 (숫자만)'}{'' if summary or not backend else ' 실패'}", file=sys.stderr)
 
     out = args.out or os.path.join("retro_out", f"daily-{day}.html")
