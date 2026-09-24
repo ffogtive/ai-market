@@ -7,6 +7,10 @@ this run's random token (?t= once, then an HttpOnly SameSite=Strict cookie); the
 Host header must be 127.0.0.1/localhost (DNS rebinding); every change is a POST
 with a same-origin Origin/Referer (CSRF); only ~/Retro/daily-*.html and
 weekly-*.html are served; user input never reaches a shell. Standard library only.
+
+회고 쓰기 (/notes?date=YYYY-MM-DD, /notes?week=MONDAY): my KPT, 가장 의미 있었던 일 and
+내일 첫 할 일 go to ~/Retro/notes-*.json (notes.py), and the day's page is rewritten in
+place from them — no LLM call, nothing sent anywhere.
 """
 import argparse
 import contextlib
@@ -31,6 +35,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import retro  # noqa: E402
+import notes  # noqa: E402
+import render  # noqa: E402  (the module retro uses)
 
 RETRO_PY = os.path.join(HERE, "retro.py")  # jobs run this with the same interpreter
 PAGE_RE = re.compile(r"(daily|weekly)-[0-9A-Za-z_-]{1,40}\.html")  # fullmatch: no dots or slashes → no traversal
@@ -177,6 +183,10 @@ button{font:inherit;min-height:40px;padding:6px 14px;cursor:pointer}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;margin:8px 0;max-height:320px;overflow:auto}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0 24px}
 ul{padding-left:20px;margin:8px 0}li{padding:2px 0}
+form.notes label{display:block;margin:10px 0 0}
+form.notes textarea,form.notes input[type=text]{display:block;width:100%;box-sizing:border-box;font:inherit;padding:8px;margin-top:4px}
+button[aria-pressed=true]{font-weight:700;outline:2px solid}
+.row .check{flex:1 1 220px}
 """
 
 # forms stay plain HTML; the only script shows progress and keeps a slow button from being pressed twice
@@ -243,7 +253,9 @@ def home_body(job, flash):
         else f'<span class="muted">{WEEK_SOON}</span>'
     parts = [flash_html(flash), "<h1>회고</h1>",
              '<section><div class="actions">', post_button("/run", "오늘 회고 만들기", [("kind", "daily")]), week,
-             '</div><p class="muted">이 컴퓨터와 등록한 서버의 기록을 모아 요약합니다. 1~2분 걸릴 수 있습니다.</p></section>']
+             '</div><p class="muted">이 컴퓨터와 등록한 서버의 기록을 모아 요약합니다. 1~2분 걸릴 수 있습니다.</p>'
+             '<p><a href="/notes">✍️ 오늘 회고 쓰기</a> <span class="muted">— KPT·내일 첫 할 일 쓰기, 지난 회고에서 정한 일 확인</span></p>'
+             '</section>']
     if job["kind"]:
         what = "오늘 회고" if job["kind"] == "daily" else "이번 주 회고"
         status = f"{what} 만드는 중…" if running else f"{what}: {job['message']}"
@@ -253,7 +265,7 @@ def home_body(job, flash):
                      f'<pre id="lines">{e(chr(10).join(job["lines"]))}</pre>{link}</section>')
     cols = []
     for prefix, title in (("daily-", "일간"), ("weekly-", "주간")):
-        items = "".join(f'<li><a href="/file/{e(n)}" target="_blank" rel="noopener">{e(page_label(n))}</a></li>'
+        items = "".join(f'<li><a href="/file/{e(n)}" target="_blank" rel="noopener">{e(page_label(n))}</a>{notes_link(n)}</li>'
                         for n in list_pages(prefix))
         cols.append(f"<div><h2>{title}</h2>{f'<ul>{items}</ul>' if items else '<p class=muted>아직 없음</p>'}</div>")
     parts.append(f'<section><h2>만든 회고</h2><div class="cols">{"".join(cols)}</div></section>')
@@ -324,6 +336,167 @@ def settings_body(flash):
                  f'<p>요약: {e(backend)} · API 키: {"있음" if os.environ.get("ANTHROPIC_API_KEY") else "없음"}'
                  f' · claude CLI: {"있음" if shutil.which("claude") else "없음"}</p></section>')
     return "".join(parts)
+
+
+# ---------------------------------------------------------------- 회고 쓰기 (my notes, notes.py)
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_notes_lock = threading.Lock()  # one save (notes file + the pages rewritten from it) at a time
+KPT_LABELS = (("keep", "Keep", "계속할 것"), ("problem", "Problem", "문제였던 것"), ("try", "Try", "다음에 해볼 것"))
+
+
+def parse_day(text):
+    if not DATE_RE.fullmatch(text or ""):
+        return None
+    try:
+        return dt.date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def notes_target(q):
+    """(kind, day) from {"date": …} (a day, default today) or {"week": …} (that week's Monday); None if invalid."""
+    if "week" in q:
+        d = parse_day(q["week"])
+        return ("weekly", render.week_days(d)[0]) if d else None
+    d = parse_day(q["date"]) if "date" in q else dt.date.today()
+    return ("daily", d) if d else None
+
+
+def notes_url(kind, day):
+    return f"/notes?{'week' if kind == 'weekly' else 'date'}={day}"
+
+
+def notes_link(page_name):
+    """' · 회고 쓰기' after a page in the home list (and whether I already wrote something)."""
+    m = render.PAGE_RE.fullmatch(page_name)
+    d = parse_day(m.group(2)) if m else None
+    if not d:
+        return ""
+    kind = m.group(1)
+    done = ' <span class="muted">(작성함)</span>' if notes.has_any(notes.load(retro.OUT_DIR, kind, d)) else ""
+    return f' · <a href="{notes_url(kind, d)}">회고 쓰기</a>{done}'
+
+
+def status_form(day, prev_day, item, value, current):
+    fields = [("date", day), ("from", prev_day), ("item", item), ("status", value)]
+    hidden = "".join(f'<input type="hidden" name="{k}" value="{e(str(v))}">' for k, v in fields)
+    return (f'<form method="post" action="/notes/followup">{hidden}'
+            f'<button aria-pressed="{"true" if value == current else "false"}">{e(value)}</button></form>')
+
+
+def followup_body(day):
+    """↩️ The first task and Try of my last notes before day, with 완료 / 이어가기 / 취소 buttons."""
+    prev = notes.previous(retro.OUT_DIR, day)
+    if not prev:
+        return ""
+    d, n = prev
+    rows = ""
+    for item, label in render.followup_labels(day, d).items():
+        text = notes.text(n, item)
+        if text:
+            cur = notes.status(n, item)
+            buttons = "".join(status_form(day, d, item, v, cur) for v in notes.STATUSES)
+            rows += (f'<div class="row"><div class="grow check"><b>{e(label)}</b><div>{e(text)}</div>'
+                     f'<div class="muted">지금: {e(cur or notes.UNCHECKED)}</div></div><div class="actions">{buttons}</div></div>')
+    return (f'<section><h2>↩️ 지난 회고 확인</h2>{rows}<p class="muted">이어가기를 누르면 아래 ‘내일 첫 할 일’(Try는 Try 칸)의 '
+            '기본값으로 가져옵니다. 결과는 그날 페이지와 주간 페이지에 표시됩니다.</p></section>')
+
+
+def notes_body(kind, day, flash):
+    out, weekly = retro.OUT_DIR, kind == "weekly"
+    n = notes.load(out, kind, day)
+    saved = render.read_cache(render.cache_path(out, kind, day))
+    s = saved["summary"] if saved else {}
+    draft = s.get("kpt") if isinstance(s.get("kpt"), dict) else {}
+    page = render.page_file(kind, day)
+    step = dt.timedelta(days=7 if weekly else 1)
+    around = (f'<a href="{notes_url(kind, day - step)}">← {"지난주" if weekly else "전날"}</a> · '
+              f'<a href="{notes_url(kind, day + step)}">{"다음 주" if weekly else "다음 날"} →</a>')
+    opened = (f'<a href="/file/{e(page)}" target="_blank" rel="noopener">페이지 열기 →</a>' if os.path.isfile(os.path.join(out, page))
+              else '<span class="muted">아직 페이지 없음 — 회고를 만들면 여기 쓴 내용이 함께 보입니다.</span>')
+    parts = [flash_html(flash), f"<h1>{e(page_label(page))} {'주간 ' if weekly else ''}회고 쓰기</h1>",
+             f"<p>{opened}</p><p class=\"muted\">{around}</p>"]
+    carry = {} if weekly else notes.carried(out, day)
+    if not weekly:
+        parts.append(followup_body(day))
+    mine = notes.kpt(n)
+    if "kpt" not in n and carry.get("try"):
+        mine["try"] = carry["try"]
+    fields = "".join(f'<label><b>{label}</b> <span class="muted">{hint}</span>'
+                     f'<textarea name="{k}" rows="3" placeholder="{e("AI 초안: " + draft[k] if draft.get(k) else "직접 작성")}">'
+                     f'{e(mine[k])}</textarea></label>' for k, label, hint in KPT_LABELS)
+    hidden = f'<input type="hidden" name="{"week" if weekly else "date"}" value="{day}">'
+    form = [f'<form class="notes" method="post" action="/notes">{hidden}',
+            f'<section><h2>✍️ {"주간 " if weekly else ""}KPT</h2>{fields}</section>',
+            f'<section><h2>🌱 {"이번 주" if weekly else "오늘"} 가장 의미 있었던 일</h2>'
+            f'<textarea name="reflection" rows="3" placeholder="직접 작성">{e(str(n.get("reflection") or ""))}</textarea></section>']
+    if not weekly:
+        ai_first = str(s.get("first_task_tomorrow") or "")
+        first = str(n.get("first_task") or "") if "first_task" in n else carry.get("first_task") or ai_first
+        why = ("저장한 내용" if "first_task" in n else "이어가기로 가져옴" if carry.get("first_task")
+               else "AI 초안 — 고쳐서 저장하세요" if ai_first else "")
+        also = f' · AI 초안: {e(ai_first)}' if ai_first and ai_first != first else ""
+        form.append(f'<section><h2>▶️ 내일 첫 할 일</h2><input type="text" name="first_task" value="{e(first)}" '
+                    f'placeholder="바로 시작할 수 있는 크기의 일 하나" autocomplete="off">'
+                    f'<p class="muted">{e(why)}{also}</p></section>')
+    form.append('<div class="actions"><button data-wait="저장 중…">저장</button></div>'
+                f'<p class="muted">{e(os.path.basename(notes.path(out, kind, day)))}에 저장합니다. 이 컴퓨터에만 남고 AI 요약에는 '
+                "보내지 않습니다. 저장하면 페이지의 ‘(직접 작성)’ 자리에 바로 보입니다(요약은 다시 하지 않음).</p></form>")
+    return "".join(parts + form)
+
+
+def rerender_cached(day):
+    """A daily page made before notes existed: render it again from ~/Retro/events.jsonl with the saved summary only."""
+    events = os.path.join(retro.OUT_DIR, "events.jsonl")
+    if not os.path.exists(events):
+        return False
+    argv = ["--date", str(day), "--llm", "cached", "--cache-dir", retro.OUT_DIR,
+            "--out", os.path.join(retro.OUT_DIR, render.page_file("daily", day)), events] + retro.off_args(argparse.Namespace())
+    buf = io.StringIO()
+    with _capture, contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        return render.main(argv) == 0
+
+
+def refresh_pages(kind, changed, shown):
+    """Rewrite the pages that show changed's notes (that day, the days after it that look back to it, their weeks).
+
+    → a sentence about the page of the screen (kind, shown).
+    """
+    days = [changed] if kind == "weekly" else [changed + dt.timedelta(days=i) for i in range(notes.LOOKBACK + 1)]
+    result = render.refresh_notes(retro.OUT_DIR, retro.OUT_DIR, days + [shown])
+    page = render.page_file(kind, shown)
+    if result.get(page):
+        return "페이지에 반영했습니다(요약은 다시 하지 않음)."
+    if page not in result:
+        return "이 날짜 회고 페이지를 만들면 함께 보입니다."
+    if kind == "daily" and rerender_cached(shown):
+        return "페이지를 저장된 요약으로 다시 만들었습니다(AI 호출 없음)."
+    return "이 페이지는 예전 형식이라 다음에 이 날짜 회고를 다시 만들 때 반영됩니다."
+
+
+def act_notes(_server, form):
+    target = notes_target(form) if ("date" in form or "week" in form) else None
+    if not target:
+        return "err", "날짜가 올바르지 않습니다.", "/notes"
+    kind, day = target
+    with _notes_lock:
+        notes.save(retro.OUT_DIR, kind, day, form.get("keep", ""), form.get("problem", ""), form.get("try", ""),
+                   form.get("reflection", ""), form.get("first_task", "") if kind == "daily" else None)
+        return "ok", "저장했습니다. " + refresh_pages(kind, day, day), notes_url(kind, day)
+
+
+def act_followup(_server, form):
+    day, prev_day = parse_day(form.get("date")), parse_day(form.get("from"))
+    item, value = form.get("item"), form.get("status")
+    if not day or not prev_day or item not in notes.ITEMS or value not in notes.STATUSES:
+        return "err", "알 수 없는 요청입니다.", notes_url("daily", day) if day else "/notes"
+    with _notes_lock:
+        prev = notes.previous(retro.OUT_DIR, day)
+        if not prev or prev[0] != prev_day or not notes.text(prev[1], item):
+            return "err", "확인할 항목이 바뀌었습니다. 화면을 다시 확인해주세요.", notes_url("daily", day)
+        notes.set_status(retro.OUT_DIR, prev_day, item, value)
+        label = render.followup_labels(day, prev_day)[item]
+        return "ok", f"{label}: {value}. " + refresh_pages("daily", prev_day, day), notes_url("daily", day)
 
 
 # ---------------------------------------------------------------- actions (POST) → (flash kind, message)
@@ -406,7 +579,7 @@ def act_unschedule(_server, _form):
 ACTIONS = {"/run": act_run, "/settings/source": act_source, "/settings/host/add": act_host_add,
            "/settings/host/remove": act_host_remove, "/settings/repo/add": act_repo_add,
            "/settings/repo/remove": act_repo_remove, "/settings/repo/pick": act_repo_pick, "/settings/schedule": act_schedule,
-           "/settings/unschedule": act_unschedule}
+           "/settings/unschedule": act_unschedule, "/notes": act_notes, "/notes/followup": act_followup}
 
 
 # ---------------------------------------------------------------- server
@@ -451,14 +624,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_text(404, "없는 기능입니다.")
             length = max(0, min(int(self.headers.get("Content-Length") or 0), 64 * 1024))
             form = {k: v[0] for k, v in parse_qs(self.rfile.read(length).decode("utf-8", "replace")).items()}
-            s.flash = action(s, form)
-            return self.redirect("/" if url.path == "/run" else "/settings")
+            result, back = action(s, form), "/" if url.path == "/run" else "/settings"
+            if result and len(result) == 3:  # (kind, message, where to go back to)
+                result, back = result[:2], result[2]
+            s.flash = result
+            return self.redirect(back)
         if url.path == "/":
             flash, s.flash = s.flash, None
             return self.send_page("회고", home_body(s.job.snapshot(), flash))
         if url.path == "/settings":
             flash, s.flash = s.flash, None
             return self.send_page("설정", settings_body(flash))
+        if url.path == "/notes":
+            target = notes_target({k: v[0] for k, v in parse_qs(url.query).items()})
+            if not target:
+                return self.send_text(404, "날짜가 올바르지 않습니다. 예: /notes?date=2026-09-24")
+            flash, s.flash = s.flash, None
+            return self.send_page("회고 쓰기", notes_body(*target, flash))
         if url.path == "/status":
             return self.send(200, "application/json", json.dumps(s.job.snapshot(), ensure_ascii=False).encode())
         if url.path.startswith("/file/"):
