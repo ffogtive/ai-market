@@ -118,15 +118,22 @@ def is_noise(text):
     return not t or t.startswith(NOISE_PREFIXES)
 
 
+# Codex writes the request header as "## My request:" in some versions and
+# "## My request for Codex:" in others. Matching only the longer one threw away the
+# whole prompt of every message with an attachment (28% of real prompts) — see HANDOFF.
+REQUEST_HEADER_RE = re.compile(r"##\s*My request(?:\s+for\s+Codex)?\s*:?[ \t]*\n?", re.I)
+
+
 def strip_attachments(text):
     """Codex prefixes context blocks ('# Files mentioned by the user', '# Context from my IDE setup')
-    before '## My request for Codex:'; keep only the request."""
+    before the request header; keep only the request."""
     head = text.lstrip()
     if head.startswith("# Files mentioned by the user"):
-        m = re.search(r"##\s*My request for Codex:?\s*(.*)", text, re.S)
-        return ("[첨부] " + m.group(1)) if m else "[첨부 파일]"
-    if head.startswith("# ") and "## My request for Codex:" in text:
-        return text.rsplit("## My request for Codex:", 1)[1].strip()
+        parts = REQUEST_HEADER_RE.split(text, 1)
+        body = parts[1].strip() if len(parts) > 1 else ""
+        return ("[첨부] " + body) if body else "[첨부 파일]"
+    if head.startswith("# ") and REQUEST_HEADER_RE.search(text):
+        return REQUEST_HEADER_RE.split(text, 1)[1].strip()
     return text
 
 

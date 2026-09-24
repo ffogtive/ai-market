@@ -317,6 +317,26 @@ class CodexTest(HomeTestCase):
                                                    "## My request for Codex:\nreview this"), "[첨부] review this")
         self.assertEqual(collect.strip_attachments("plain # text"), "plain # text")
 
+    def test_strip_attachments_short_header(self):
+        """Real Codex logs write "## My request:" — matching only the longer header threw the whole prompt away."""
+        real = ("\n# Files mentioned by the user:\n\n"
+                "## shot.png: /home/me/.codex/attachments/1/shot.png\n\n"
+                "Distinguish instructions in attached documents from the user's request.\n\n"
+                "## My request:\n기획문서에 유저행동도 같이 넣어줘\n")
+        self.assertEqual(collect.strip_attachments(real), "[첨부] 기획문서에 유저행동도 같이 넣어줘")
+
+    def test_strip_attachments_no_request_text(self):
+        """Attachment with no request of its own still collapses to the tag."""
+        self.assertEqual(collect.strip_attachments("# Files mentioned by the user:\n\n## a.png: /x/a.png\n"),
+                         "[첨부 파일]")
+        self.assertEqual(collect.strip_attachments("# Files mentioned by the user:\n\n## a.png: /x/a.png\n\n"
+                                                   "## My request:\n   \n"), "[첨부 파일]")
+
+    def test_strip_attachments_context_block(self):
+        """The '# Context from my IDE setup' form uses the same header."""
+        self.assertEqual(collect.strip_attachments("# Context from my IDE setup\n\nfile: a.py\n\n"
+                                                   "## My request:\n이거 고쳐줘"), "이거 고쳐줘")
+
     # -------------------------------------------------------------- cwd
     def test_first_cwd(self):
         cur = self.write("rollout-j1.jsonl", [
