@@ -30,6 +30,7 @@
 | Chrome 방문 기록 | Chrome 프로필의 `History` 파일 **복사본** | 원본을 잠그지 않도록 임시 폴더에 복사해 읽고 지움 |
 | YouTube | 사용자가 지정한 Google Takeout 파일(`--youtube`) | 지정할 때만 |
 | 다른 기기 | `retro add-host`로 등록한 ssh 호스트에서 같은 수집기 실행 | 사용자의 ssh 키 사용, 비밀번호 저장 안 함 |
+| 설정 화면 (`retro app`) | 새로 읽는 것 없음. 위 명령들과 같은 설정 파일·`~/Retro/daily-*.html`·`weekly-*.html`만 사용 | 이 컴퓨터(127.0.0.1)에서만 열리는 임시 서버. 실행할 때마다 새 무작위 토큰이 있어야 열리고, 다른 사이트의 요청은 거부. 외부로 보내는 것 없음, Ctrl+C로 종료 |
 
 - **쓰는 곳:** `~/Retro/`(events.jsonl, daily-날짜.html, retro.log), `~/.config/retro/config.json`(등록한 호스트), macOS 예약 실행 시 `~/Library/LaunchAgents/`.
 - **요약(`render.py`):** 서술 요약이 필요할 때만 하루 타임라인을 **사용자 자신의 Anthropic 계정**으로 보냅니다(`ANTHROPIC_API_KEY` 또는 설치된 `claude -p`). retro 서버를 거치지 않습니다. `--llm none`이면 외부 전송 없이 숫자만 계산합니다.

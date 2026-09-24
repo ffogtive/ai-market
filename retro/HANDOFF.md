@@ -10,6 +10,7 @@
 | 회고 페이지 생성 | `retro/render.py` | ✅ 실데이터 검증. 숫자는 로그로 계산, 서술은 Claude 요약(구조화 출력). 백엔드 auto: API 키 → `claude -p` CLI(키 불필요) → 숫자만 |
 | 주간 회고 페이지 | `retro week`, `render.py --week` | ✅ (9/24) 월–일 한 주: 합계 KPI·요일별 막대·프로젝트·날짜별 표는 로그로 계산, 한 일·결정·반복된 문제·다음 주는 주간 요약(일간과 같은 백엔드·폴백). 프롬프트는 하루 60줄·줄당 120자로 압축. 합성 데이터 테스트(`retro/tests/test_weekly.py`), **실데이터 미검증** |
 | 한 줄 설치 + 명령 | `retro/retro.py`, `retro/install.sh` | ✅ uv로 Python 무관. `retro` / `add-host` / `schedule`(macOS launchd) / `doctor`. 신규 환경 설치·실행·업데이트 검증 |
+| 설정·실행 화면 | `retro app`, `retro/app.py` | ✅ (9/24) 터미널 없이 쓰는 로컬 웹 화면(와이어프레임). 홈: 만든 회고 목록 + "오늘/이번 주 회고 만들기"(진행 줄 실시간 표시). 설정: 소스 켜기·끄기, ssh 서버·저장소 추가/삭제, 자동 실행(맥), 요약 상태. 127.0.0.1 전용·실행마다 토큰·Host/Origin 검사. 테스트 `retro/tests/test_app.py`, **사용자 맥 미검증**, 디자인은 추후 |
 | 브라우저 확장 | `retro/extension/` | ✅ 가짜 서버 e2e. ChatGPT·Claude 오늘 대화 + 방문 기록 → `~/Downloads/retro/browser-날짜.jsonl`. **실계정 미검증** |
 | MCP 서버 PoC | `retro/mcp/` | ✅ 공식 SDK 클라이언트 e2e. `log_activity`/`get_today`/`forget`, Cloudflare Worker+KV. **미배포** |
 

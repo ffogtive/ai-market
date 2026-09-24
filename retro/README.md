@@ -13,6 +13,7 @@ retro sources                                      # 무엇을 읽는지, 꺼진
 retro off chrome / retro on chrome                 # 소스 끄기·켜기 (claude codex git chrome extension)
 retro add-repo ~/code                              # AI 세션 없이 커밋한 저장소도 수집 (저장소 또는 상위 폴더). 목록: retro repos, 빼기: retro remove-repo
 retro schedule --at 22:00                          # 매일 자동 실행 (맥), 끄기: retro unschedule
+retro app                                          # 명령어 없이 브라우저 화면에서: 회고 만들기 버튼 + 설정(소스·서버·저장소·자동 실행). 끄기: Ctrl+C
 retro update                                       # 최신 버전으로
 ```
 
