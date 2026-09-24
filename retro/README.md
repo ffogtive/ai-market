@@ -8,6 +8,8 @@ retro                                              # 오늘의 회고 → ~/Retr
 retro add-host "ssh -p 10024 user@서버"            # 서버도 매번 함께 수집 (서버엔 아무것도 설치 안 함)
 retro --date 2026-09-23                            # 지난 날짜
 retro week                                         # 이번 주(월–일) 회고 → ~/Retro/weekly-월요일날짜.html (--date로 지난 주)
+retro --refresh                                    # 요약 새로 받기 (기본은 로그가 그대로면 저장된 요약 재사용). retro week --refresh도 같음
+open ~/Retro/index.html                            # 모든 회고 목록(최신 주부터). 실행할 때마다 새로 만듦
 retro doctor                                       # 출처별 진단
 retro sources                                      # 무엇을 읽는지, 꺼진 소스
 retro off chrome / retro on chrome                 # 소스 끄기·켜기 (claude codex git chrome extension)
@@ -19,6 +21,9 @@ retro update                                       # 최신 버전으로
 - Python: uv가 3.12를 따로 받아 씀 → 맥의 Python 3.9, 서버의 3.6 무관
 - 요약: `ANTHROPIC_API_KEY`가 있으면 API, 없으면 설치된 **Claude Code(`claude -p`)**로 → API 키 불필요. 둘 다 없으면 숫자만
 - `--llm none`: 로그 원문을 외부로 보내지 않음
+- 요약 저장: `~/Retro/summary-daily-날짜.json`·`summary-weekly-월요일날짜.json`. 로그가 그대로면 다시 요약하지 않음(즉시, 사용량 0). 새 요약이 실패하면 이전 요약을 보여주고 페이지 맨 아래에 이유 표시
+- 주간 요약은 그 주에 저장된 일간 요약을 먼저 읽고 원문은 하루 20줄만 봄 → 짧고 정확
+- 페이지 맨 위 `← 이전 날 · 주간 보기 · 목록 · 다음 날 →` (주간: `← 지난주 · 목록 · 다음 주 →`), 있는 페이지만 링크. 예전에 만든 페이지는 다시 만들 때 생김
 
 ---
 
@@ -72,6 +77,7 @@ open retro_out/daily-2026-09-23.html
 
 - 숫자(시간대별 활동, 지시 수, 커밋, 사이트)는 라벨로 계산하고, 요약·한 일·결정·막힌 것·내일·활동 유형은 Claude가 작성.
 - `--no-llm`: API 없이 숫자만. 요약 실패(인증, 한도, 거절) 시에도 숫자 페이지는 생성됨.
+- 요약은 `--out` 옆(또는 `--cache-dir`)에 JSON으로 저장·재사용, `--refresh`로 다시 요약. 같은 폴더에 `index.html`도 만듦.
 - 라벨: `actor`(human / agent: `claude -p` 같은 헤드리스 실행), `source`, `project`, `host`.
 - 해당 날짜의 **내가 입력한 로그 원문이 Anthropic API로 전송됨**. 민감하면 `--no-llm`.
 
