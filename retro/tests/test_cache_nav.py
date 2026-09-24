@@ -28,20 +28,23 @@ MON = dt.date(2026, 9, 21)  # a Monday
 WED = MON + dt.timedelta(days=2)
 DAYS = render.week_days(MON)
 
-DAILY = {
+V2_EMPTY = {"keywords": [], "til": [], "kpt": {"keep": "", "problem": "", "try": ""}, "prompt_coaching": [],
+            "automation_ideas": []}  # template v2 fields, left empty (the LLM may)
+DAILY = dict(V2_EMPTY, **{
     "one_line": "결제 흐름을 고쳤다",
-    "done": [{"time": "09:05", "project": "shop", "result": "결제 버그 수정", "evidence": "Claude Code"}],
-    "decisions": [], "blockers": [], "tomorrow": [],
+    "done": [{"time": "09:05", "project": "shop", "result": "결제 버그 수정", "status": "완료",
+              "evidence": [{"time": "12:00", "source": "git"}]}],
+    "decisions": [], "blockers": [], "tomorrow": [], "first_task_tomorrow": "",
     "activity_mix": [{"type": "개발", "percent": 100}],
     "project_labels": [],
-}
-WEEKLY = {
+})
+WEEKLY = dict(V2_EMPTY, **{
     "one_line": "결제와 가격 페이지를 냈다",
-    "highlights": [{"days": "월", "project": "shop", "result": "결제 버그 수정"}],
+    "highlights": [{"days": "월", "project": "shop", "result": "결제 버그 수정", "status": "완료", "evidence": []}],
     "decisions": [], "blockers": [], "next_week": [],
     "activity_mix": [{"type": "개발", "percent": 100}],
     "project_labels": [],
-}
+})
 
 
 def ev(day, hm, source, text, project="shop", actor="human"):
@@ -146,13 +149,22 @@ class CacheTest(Site):
         self.assertIn("이전 요약 표시 — ", foot)
         self.assertIn("Claude 로그인이 만료", foot)  # LAST_FAILURE
         self.assertNotIn("숫자만 표시", foot)
-        self.assertEqual(self.cache(), saved)  # the older summary stays; next run tries again
+        stale = f"{render.made_at(saved)}에 만든 요약 — 현재 숫자와 다른 시점의 요약입니다."
+        self.assertIn(stale, page)  # said next to the summary too
+        now = self.cache()
+        self.assertEqual({k: v for k, v in now.items() if k != "numbers"},
+                         {k: v for k, v in saved.items() if k != "numbers"})  # the older summary stays; next run tries again
+        self.assertEqual(now["numbers"], {"prompts": 3, "commits": 1})  # the counts are local, so they are current
 
     def test_failure_without_cache_is_numbers_only(self):
         self.fail = RuntimeError("boom")
         page, _ = self.render()
         self.assertIn("숫자만 표시 — 요약 실패: boom", page)
-        self.assertFalse(os.path.exists(render.cache_path(self.dir, "daily", MON)))
+        self.assertIsNone(render.read_cache(render.cache_path(self.dir, "daily", MON)))  # no summary saved…
+        self.assertEqual(self.cache()["numbers"], {"prompts": 2, "commits": 1})  # …only the counts, for index.html
+        self.fail = None
+        self.render()
+        self.assertEqual(len(self.prompts), 2)  # a numbers-only file is not a summary: the next run summarizes
 
     def test_refresh_forces(self):
         self.render()
@@ -283,7 +295,8 @@ class NavTest(Site):
         for name in os.listdir(self.dir):
             if name.endswith(".html"):
                 for href in hrefs(self.read(name)):
-                    self.assertTrue(os.path.exists(os.path.join(self.dir, href)), f"{name} → {href}")
+                    path = href.split("#")[0]  # daily-DATE.html#am: that page's 오전 tab; "#pm" alone: this page
+                    self.assertTrue(not path or os.path.exists(os.path.join(self.dir, path)), f"{name} → {href}")
 
     def test_weeks_link_to_each_other(self):
         self.old_page("weekly-2026-09-14.html")
@@ -293,7 +306,11 @@ class NavTest(Site):
     def test_weekly_table_links_days_rendered_later(self):
         self.render(week=True)
         self.render(WED)
-        self.assertIn('<td><a href="daily-2026-09-23.html">09/23 (수)</a></td>', self.read("weekly-2026-09-21.html"))
+        week = self.read("weekly-2026-09-21.html")
+        self.assertIn('<td><a href="daily-2026-09-23.html">09/23 (수)</a></td>', week)
+        self.assertIn('<a href="daily-2026-09-23.html#pm">1</a>', week)  # 오후 count → that tab
+        self.assertIn('<a href="daily-2026-09-23.html">수 09/23</a>', week)  # heatmap day label
+        self.assertIn('<span data-link="daily-2026-09-21.html#am">2</span>', week)  # Mon still has no page
 
     def test_old_pages_are_left_alone(self):
         self.old_page("daily-2026-09-20.html")
@@ -316,7 +333,9 @@ class IndexTest(Site):
         self.assertEqual(order, sorted(order))
         self.assertIn("결제와 가격 페이지를 냈다", index)  # the week's saved one-liner
         self.assertIn('<td>결제 흐름을 고쳤다</td><td class="num">2</td><td class="num">1</td>', index)
-        self.assertIn('<a href="daily-2026-09-23.html">09/23 (수)</a></td><td></td><td class="num"></td>', index)  # no summary yet
+        # --llm none: no one-liner, but the counts are computed locally and listed
+        self.assertIn('<a href="daily-2026-09-23.html">09/23 (수)</a></td><td></td><td class="num">1</td><td class="num">1</td>',
+                      index)
         self.assertIn("주간 페이지 없음", index)  # week of 9/14 has only a daily page
         for href in hrefs(index):
             self.assertTrue(os.path.exists(os.path.join(self.dir, href)), href)

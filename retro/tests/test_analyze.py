@@ -88,6 +88,25 @@ class ClassifyTest(unittest.TestCase):
     def test_email_with_percent_is_not_a_shell_prompt(self):
         self.assertEqual(an.classify_prompt("sjy@ffogtive.com 으로 50% 할인 쿠폰 보내"), an.INSTRUCT)
 
+    def test_again_alone_is_not_a_complaint(self):
+        # "다시" in a normal, longer instruction is a request, not a complaint
+        for text in ("결제 페이지를 처음부터 다시 설계하고 테스트까지 추가해줘",
+                     "로그인 페이지 레이아웃을 다시 정리하고 버튼 색도 파란색으로 바꿔줘",
+                     "[음성] 어제 만든 가격 페이지 문구를 다시 읽어보고 오타를 전부 고쳐줘"):
+            with self.subTest(text=text):
+                self.assertGreater(len(an.clean(text)), an.AGAIN_SHORT)
+                self.assertEqual(an.classify_prompt(text), an.INSTRUCT)
+        # short, or next to 아니·왜·안 돼·틀렸·말고·제대로: a complaint
+        for text in ("다시", "다시 해봐", "테스트 다시 돌려줘", "처음부터 다시 만들어줘 이번엔 꼭",
+                     "왜 이렇게 됐는지 모르겠는데 결제 모듈 전체를 다시 만들어줘 테스트도",
+                     "결제 모듈 전체를 제대로 다시 만들어줘 테스트까지 전부 포함해서 부탁해",
+                     "이건 안돼 결제 모듈 쪽을 처음부터 다시 확인해서 전부 고쳐줘 이번엔",
+                     "그거 말고 결제 모듈 전체를 처음부터 다시 만들어줘 테스트도 같이"):
+            with self.subTest(text=text):
+                self.assertEqual(an.classify_prompt(text), an.FIX)
+        # "왜" without "다시" is not a complaint on its own
+        self.assertEqual(an.classify_prompt("왜 이렇게 동작하는지 결제 모듈 코드를 읽고 설명해줘"), an.INSTRUCT)
+
     def test_long_approval_is_instruction(self):
         # "진행" is an approval only when short; a long text with it is a request
         self.assertEqual(an.classify_prompt("좋아 이 방향으로 진행하고 결제 모듈 테스트까지 추가해줘"), an.INSTRUCT)
@@ -126,6 +145,19 @@ class BehaviorTest(unittest.TestCase):
         b = an.prompt_behavior([prompt(at(0), "테스트 돌려줘"), prompt(at(31), "테스트 돌려줘")])
         self.assertEqual(b["retries"], 0)
 
+    def test_retry_needs_same_tool_host_project(self):
+        first = prompt(at(0), "테스트 돌려줘")
+        for other in (prompt(at(5), "테스트 돌려줘", project="blog"), prompt(at(5), "테스트 돌려줘", source="codex"),
+                      dict(prompt(at(5), "테스트 돌려줘"), host="gpu")):
+            with self.subTest(other=(other["source"], other["host"], other["project"])):
+                self.assertEqual(an.prompt_behavior([first, other])["retries"], 0)
+        self.assertEqual(an.prompt_behavior([first, prompt(at(5), "테스트 돌려줘")])["retries"], 1)
+
+    def test_retry_similarity_uses_the_start(self):
+        long_ = "결제 모듈 테스트를 돌리고 실패한 케이스를 정리해줘 " * 10
+        b = an.prompt_behavior([prompt(at(0), long_), prompt(at(5), "지금 " + long_)])
+        self.assertEqual(b["retries"], 1)  # same start → retry, even though only the first 80 chars are compared
+
     def test_retry_similar_not_prefix(self):
         b = an.prompt_behavior([prompt(at(0), "fix the login bug in auth"),
                                 prompt(at(5), "please fix the login bug in auth")])
@@ -157,6 +189,22 @@ class BehaviorTest(unittest.TestCase):
         b = an.prompt_behavior([prompt(at(i * 40), t) for i, t in enumerate(texts)])
         self.assertEqual(b["top_repeated"], [("retro/render.py 테스트 돌려줘", 3),
                                              ("https://github.com/x/y/pull/7 리뷰해줘", 2)])
+
+    def test_repeated_groups_keep_two_examples(self):
+        texts = ["retro/render.py 테스트 돌려줘", "retro/render.py 테스트 돌려줘", "~/x/collect.py 테스트 돌려줘",
+                 "테스트 돌려줘 (3)"]
+        b = an.prompt_behavior([prompt(at(i * 40), t) for i, t in enumerate(texts)])
+        self.assertEqual(b["repeated"], [{"count": 4, "examples": ["retro/render.py 테스트 돌려줘",
+                                                                   "~/x/collect.py 테스트 돌려줘"]}])
+        self.assertEqual(b["top_repeated"], [("retro/render.py 테스트 돌려줘", 4)])
+
+    def test_long_runs_stay_fast(self):
+        # a 600-char run without spaces (a pasted token, base64 …) must not make the regexes quadratic
+        import time
+        events = [prompt(at(i), "x" * 600 + str(i)) for i in range(200)]
+        start = time.time()
+        an.prompt_behavior(events)
+        self.assertLess(time.time() - start, 5)
 
     def test_top_repeated_cap(self):
         events = [prompt(at(k * 2 + i), f"요청 {chr(0xAC00 + k)} 해줘") for k in range(7) for i in range(2)]
@@ -203,6 +251,24 @@ class RhythmTest(unittest.TestCase):
         self.assertEqual((first["project"], first["prompts"], first["commits"], first["web"]), ("shop", 4, 1, 1))
         self.assertEqual((r["longest"]["project"], r["longest"]["start"]), ("blog", at(200)))
         self.assertEqual(r["focus_minutes"], 120)
+
+    def test_web_only_chain_is_not_a_block(self):
+        web = [ev(at(i * 10), "chrome", "Docs", "github.com") for i in range(8)]  # 70 min of browsing only
+        self.assertEqual(an.work_rhythm(web)["focus_blocks"], [])
+        with_prompt = sorted(web + [prompt(at(35))], key=lambda e: e["ts"])
+        blocks = an.work_rhythm(with_prompt)["focus_blocks"]
+        self.assertEqual([(b["minutes"], b["prompts"], b["web"]) for b in blocks], [(70, 1, 8)])
+
+    def test_browse_before_prompts(self):
+        events = [ev(at(0), "chrome", "A", "docs.python.org"),  # next prompt 12 min later: no
+                  ev(at(5), "chrome", "B", "stackoverflow.com"),  # 7 min: yes
+                  prompt(at(12)),
+                  ev(at(30), "chrome", "C", "news.com"),  # 31 min: no
+                  ev(at(51), "chrome", "D", "stackoverflow.com"),  # exactly 10 min: yes
+                  prompt(at(61)), ev(at(62), "chrome", "E", "after.com")]  # no prompt after it
+        r = an.browse_before_prompts(events)
+        self.assertEqual((r["visits"], r["web"]), (2, 5))
+        self.assertEqual(r["sites"], [("stackoverflow.com", 2)])
 
     def test_context_switches_ignore_web_and_empty(self):
         events = [prompt(at(0), "a", "shop"), ev(at(1), "chrome", "Docs", "github.com"), prompt(at(2), "b", "shop"),
@@ -273,7 +339,10 @@ class FactsTest(unittest.TestCase):
         facts = an.facts_for_llm(an.prompt_behavior(events), an.work_rhythm(events))
         self.assertIn("내 지시 3건: 지시 2, 확인·승인 1", facts)
         self.assertIn("30분 내 재시도 1회", facts)
-        self.assertIn("몰입 1시간 0분(1구간, 최장 09:00–10:00 shop)", facts)
+        self.assertIn("연속 활동 구간 1시간 0분(1개, 가장 긴 구간 09:00–10:00 shop)", facts)
+        self.assertIn("내 지시 1건당 자동 실행 0건", facts)
+        self.assertNotIn("몰입", facts)  # neutral wording: records that run on, not focus
+        self.assertNotIn("일부 생략", facts)
         self.assertIn("shop 3→1(60분)", facts)
         self.assertIn('"로그인 만들어줘"×2', facts)
 
@@ -284,13 +353,14 @@ class FactsTest(unittest.TestCase):
         facts = an.facts_for_llm(b, r)
         self.assertLessEqual(len(facts), an.FACTS_LIMIT)
         self.assertIn("내 지시 300건", facts)
-        self.assertIn("몰입", facts)  # trimming drops the tail (repeated requests) first
+        self.assertIn("연속 활동 구간", facts)  # trimming drops the tail (repeated requests) first
+        self.assertTrue(facts.endswith("(일부 생략)"), facts)  # …and says so
         self.assertLessEqual(len(an.facts_for_llm(b, r, limit=80)), 80)
 
     def test_no_prompts(self):
         facts = an.facts_for_llm(an.prompt_behavior([]), an.work_rhythm([]))
         self.assertIn("내 지시 없음", facts)
-        self.assertIn("레버리지(위임/지시) 없음", facts)
+        self.assertIn("내 지시 1건당 자동 실행 계산 불가", facts)
 
 
 if __name__ == "__main__":

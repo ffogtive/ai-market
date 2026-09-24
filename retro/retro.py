@@ -194,22 +194,30 @@ def cache_args(args):
     return ["--cache-dir", OUT_DIR] + (["--refresh"] if getattr(args, "refresh", False) else [])
 
 
+def off_args(args):
+    """sources left out of this run (`retro off …`, --no-chrome), for the page's 관측 범위 line"""
+    off = list(load_config().get("off", []))
+    if getattr(args, "no_chrome", False) and "chrome" not in off:
+        off.append("chrome")
+    return ["--off", ",".join(off)] if off else []
+
+
 def cmd_run(args):
     day = dt.date.fromisoformat(args.date) if args.date else dt.date.today()
     days = (dt.date.today() - day).days + 7  # enough history for the 7-day chart
     path = collect_all(day, days, args.no_chrome)
-    return render_and_open(["--date", str(day), "--llm", args.llm, path] + cache_args(args),
+    return render_and_open(["--date", str(day), "--llm", args.llm, path] + cache_args(args) + off_args(args),
                            os.path.join(OUT_DIR, f"daily-{day}.html"), args.no_open)
 
 
 def cmd_week(args):
-    """Mon–Sun page for the week containing --date (default: this week)."""
+    """Mon–Sun page for the week containing --date (default: this week), plus the week before for ▲▼."""
     today = dt.date.today()
     day = dt.date.fromisoformat(args.date) if args.date else today
     monday = render.week_days(day)[0]
     end = min(monday + dt.timedelta(days=6), today)  # days after today have no logs yet
-    path = collect_all(end, max((today - monday).days, 0) + 1, args.no_chrome)
-    return render_and_open(["--week", "--date", str(day), "--llm", args.llm, path] + cache_args(args),
+    path = collect_all(end, max((today - monday).days, 0) + 7, args.no_chrome)  # back to the Monday before
+    return render_and_open(["--week", "--date", str(day), "--llm", args.llm, path] + cache_args(args) + off_args(args),
                            os.path.join(OUT_DIR, f"weekly-{monday}.html"), args.no_open)
 
 
