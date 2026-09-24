@@ -9,6 +9,7 @@
 | 로컬 수집기 | `retro/collect.py` | ✅ 검증 (사용자 맥 + GPU 서버). Claude Code·Codex 프롬프트, git, YouTube(Takeout), Chrome 기록. `actor`(human/agent)·`host` 라벨. `--stdout`은 JSONL, `--doctor` 진단. Python 3.6+·구 git 호환 |
 | 회고 페이지 생성 | `retro/render.py` | ✅ 실데이터 검증. 숫자는 로그로 계산, 서술은 Claude 요약(구조화 출력). 백엔드 auto: API 키 → `claude -p` CLI(키 불필요) → 숫자만 |
 | 주간 회고 페이지 | `retro week`, `render.py --week` | ✅ (9/24) 월–일 한 주: 합계 KPI·요일별 막대·프로젝트·날짜별 표는 로그로 계산, 한 일·결정·반복된 문제·다음 주는 주간 요약(일간과 같은 백엔드·폴백). 프롬프트는 하루 60줄·줄당 120자로 압축. 합성 데이터 테스트(`retro/tests/test_weekly.py`), **실데이터 미검증** |
+| 요약 저장 · 페이지 이동 · 목록 | `render.py`, `retro --refresh`, `~/Retro/index.html` | ✅ (9/24) 요약을 `~/Retro/summary-*.json`에 저장, 로그가 그대로면 LLM 호출 없이 재사용(`--refresh`로 강제). 새 요약 실패 시 이전 요약 + 이유 표시. 주간 프롬프트는 저장된 일간 요약 + 하루 원문 20줄. 페이지 위 `← 이전 날 · 주간 보기 · 목록 · 다음 날 →`(있는 페이지만, 이후 생긴 페이지는 다음 실행 때 링크 갱신), 날짜별 표에서 일간으로 링크, `index.html` 최신 주부터. 합성 데이터 테스트(`retro/tests/test_cache_nav.py`), **실데이터 미검증** |
 | 한 줄 설치 + 명령 | `retro/retro.py`, `retro/install.sh` | ✅ uv로 Python 무관. `retro` / `add-host` / `schedule`(macOS launchd) / `doctor`. 신규 환경 설치·실행·업데이트 검증 |
 | 브라우저 확장 | `retro/extension/` | ✅ 가짜 서버 e2e. ChatGPT·Claude 오늘 대화 + 방문 기록 → `~/Downloads/retro/browser-날짜.jsonl`. **실계정 미검증** |
 | MCP 서버 PoC | `retro/mcp/` | ✅ 공식 SDK 클라이언트 e2e. `log_activity`/`get_today`/`forget`, Cloudflare Worker+KV. **미배포** |

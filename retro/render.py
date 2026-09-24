@@ -9,10 +9,17 @@ passing several). Numbers (hours, counts, commits) are computed here from the
 labels; the narrative parts (summary, done, decisions, blockers, tomorrow,
 activity mix) come from one Claude call. --no-llm renders the numbers only.
 
+The summary is saved next to the page (summary-daily-DATE.json /
+summary-weekly-MONDAY.json) and reused while the logs stay the same, so a
+re-render costs no LLM call; --refresh summarizes again anyway. Each run also
+rewrites index.html (every page, newest first) and the ← · → rows at the top
+of the pages in that folder.
+
 Needs: pip install anthropic, and ANTHROPIC_API_KEY (or `ant auth login`).
 """
 import argparse
 import datetime as dt
+import hashlib
 import html
 import inspect
 import json
@@ -188,6 +195,7 @@ WEEK_SYSTEM = """당신은 사용자의 한 주 활동 로그를 읽고 주간 �
 WEEK_TASK = "표준 입력의 로그로 주간 회고를 작성하세요."
 WEEK_LINE_WIDTH = 120  # chars per log line in the weekly prompt
 WEEK_DAY_LINES = 60  # log lines per day in the weekly prompt
+WEEK_DAY_LINES_WITH_DAILY = 20  # fewer raw lines on days whose daily summary is in the prompt
 
 
 def pick_backend(choice):
@@ -222,6 +230,10 @@ def sample_evenly(items, n):
     return [items[round(i * (len(items) - 1) / (n - 1))] for i in range(n)]
 
 
+def clip(line, width=WEEK_LINE_WIDTH):
+    return line if len(line) <= width else line[:width - 1] + "…"
+
+
 def compact_day(events, cap=WEEK_DAY_LINES, width=WEEK_LINE_WIDTH):
     """A day's own AI prompts + commits as short lines, for the weekly prompt.
 
@@ -239,8 +251,7 @@ def compact_day(events, cap=WEEK_DAY_LINES, width=WEEK_LINE_WIDTH):
             continue
         last = key
         proj = f"[{e['project']}] " if e["project"] else ""
-        line = f"{e['ts']:%H:%M} {e['source']} {proj}{text}"
-        line = line if len(line) <= width else line[:width - 1] + "…"
+        line = clip(f"{e['ts']:%H:%M} {e['source']} {proj}{text}", width)
         (commits if e["source"] == "git" else prompts).append(line)
     total = len(prompts) + len(commits)
     if total > cap:
@@ -249,7 +260,19 @@ def compact_day(events, cap=WEEK_DAY_LINES, width=WEEK_LINE_WIDTH):
     return sorted(commits + prompts), total  # lines start with HH:MM
 
 
-def build_week_prompt(days, by_day, stats):
+def daily_digest(label, summary, fresh):
+    """A day's saved daily summary in a few lines: its one-liner and results."""
+    out = [f"# {label} 일간 요약" + ("" if fresh else " (그 뒤 로그 일부 미반영)"),
+           clip("한 줄: " + str(summary.get("one_line", "")))]
+    for x in (summary.get("done") or [])[:10]:
+        proj = f"[{x.get('project')}] " if x.get("project") else ""
+        out.append(clip(f"- {x.get('time', '')} {proj}{x.get('result', '')}"))
+    return out
+
+
+def build_week_prompt(days, by_day, stats, dailies=None):
+    """dailies: {day: (daily summary, fresh)} — those days get the summary first and fewer raw lines."""
+    dailies = {d: v for d, v in (dailies or {}).items() if by_day.get(d)}
     facts = [f"기간: {days[0]} (월) – {days[-1]} (일)",
              f"이번 주 합계: 직접 입력한 AI 지시 {stats['prompts']}건, 에이전트 간 지시 {stats['agent']}건, "
              f"커밋 {stats['commits']}건(+{stats['add']}/-{stats['dele']}), 웹 방문 {stats['web']}건, "
@@ -264,10 +287,14 @@ def build_week_prompt(days, by_day, stats):
         span = f", {s['first']:%H:%M}–{s['last']:%H:%M}" if s["first"] else ""
         facts.append(f"- {label}: AI 지시 {s['prompts']}건, 에이전트 간 지시 {s['agent']}건, "
                      f"커밋 {s['commits']}건(+{s['add']}/-{s['dele']}), 웹 방문 {s['web']}건{span}")
-        lines, total = compact_day(by_day[d])
+        if d in dailies:
+            log += daily_digest(label, *dailies[d])
+        lines, total = compact_day(by_day[d], cap=WEEK_DAY_LINES_WITH_DAILY if d in dailies else WEEK_DAY_LINES)
         if lines:
             note = f"{total}줄 중 {len(lines)}줄, 고르게 뽑음" if total > len(lines) else f"{total}줄"
             log += [f"# {label} ({note})"] + lines
+    if dailies:
+        facts.append(f"일간 요약이 있는 날은 그 요약을 먼저 싣고, 원문은 하루 {WEEK_DAY_LINES_WITH_DAILY}줄까지만 고르게 뽑았습니다.")
     return "\n".join(facts) + "\n\n<log>\n" + "\n".join(log) + "\n</log>"
 
 
@@ -328,6 +355,7 @@ def summarize(prompt, system=SYSTEM, schema=SUMMARY_SCHEMA):
 
 # why the last get_summary() produced no summary, in words the user can act on (shown in the page footer)
 LAST_FAILURE = ""
+LAST_BACKEND = ""  # which backend wrote the last summary (api / claude); saved with it
 
 
 def explain_failure(msg):
@@ -345,7 +373,7 @@ def explain_failure(msg):
 
 def get_summary(choice, prompt, system=SYSTEM, schema=SUMMARY_SCHEMA, task=DAILY_TASK):
     """auto: API → on any failure the claude CLI with the user's own login → None (numbers only)."""
-    global LAST_FAILURE
+    global LAST_FAILURE, LAST_BACKEND
     summary, why = None, ""
     api_failed = False
     backend = pick_backend(choice)
@@ -385,6 +413,7 @@ def get_summary(choice, prompt, system=SYSTEM, schema=SUMMARY_SCHEMA, task=DAILY
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as e:
             why = str(e) or "timeout"
             print(f"summary failed ({e}) — rendering numbers only", file=sys.stderr)
+    LAST_BACKEND = backend if summary else ""
     if summary:
         LAST_FAILURE = ""
     elif choice == "none":
@@ -397,6 +426,87 @@ def get_summary(choice, prompt, system=SYSTEM, schema=SUMMARY_SCHEMA, task=DAILY
         print(f"· {LAST_FAILURE}", file=sys.stderr)
     print(f"· 요약: {backend or '없음 (숫자만)'}{'' if summary or not backend else ' 실패'}", file=sys.stderr)
     return summary
+
+
+# ---------------------------------------------------------------- summary cache
+def prompt_hash(prompt, system, schema):
+    """Same logs (and same instructions) → same hash → the saved summary still fits."""
+    blob = json.dumps([system, schema, prompt], ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def cache_path(cache_dir, kind, day):
+    return os.path.join(cache_dir, f"summary-{kind}-{day}.json")
+
+
+def read_cache(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            entry = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return entry if isinstance(entry, dict) and isinstance(entry.get("summary"), dict) else None
+
+
+def write_file(path, text):
+    """Write via a temp file: a crash or a second retro running at the same time never leaves half a file."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def write_cache(path, entry):
+    write_file(path, json.dumps(entry, ensure_ascii=False, indent=1))
+
+
+def made_at(entry):
+    try:
+        return f"{dt.datetime.fromisoformat(entry['created']):%m/%d %H:%M}"
+    except (KeyError, TypeError, ValueError):
+        return "이전"
+
+
+def cached_summary(choice, prompt, system, schema, task, path, refresh=False, numbers=None):
+    """get_summary(), except the same logs are never summarized twice.
+
+    Returns (summary, footer note). The saved summary is reused while the prompt
+    hash matches; new logs or --refresh summarize again, and if that fails the
+    older summary is shown (the footer says so) instead of numbers only.
+    numbers: a few counts saved alongside, for index.html.
+    """
+    if choice == "none" or not path:
+        return get_summary(choice, prompt, system, schema, task), ""
+    digest = prompt_hash(prompt, system, schema)
+    saved = read_cache(path)
+    if saved and saved.get("prompt_sha256") == digest and not refresh:
+        print("· 요약: 캐시 재사용", file=sys.stderr)
+        return saved["summary"], f"요약은 Claude가 작성 ({made_at(saved)}에 만든 요약 재사용)"
+    summary = get_summary(choice, prompt, system, schema, task)
+    if summary:
+        write_cache(path, {"prompt_sha256": digest, "created": dt.datetime.now().isoformat(timespec="seconds"),
+                           "backend": LAST_BACKEND, "summary": summary, "numbers": numbers or {}})
+        return summary, ""
+    if saved:
+        print("· 새 요약 실패 → 이전 요약 표시", file=sys.stderr)
+        return saved["summary"], (f"이전 요약 표시 — {made_at(saved)}에 만든 요약이라 그 뒤 로그는 빠져 있을 수 있습니다. "
+                                  f"{LAST_FAILURE}")
+    return None, ""
+
+
+def saved_dailies(days, by_day, stats, cache_dir):
+    """{day: (daily summary, fresh)} for the week's days that have a saved daily summary.
+
+    fresh: made from exactly these logs (the hash the daily page would get now).
+    """
+    out = {}
+    for d in days:
+        saved = read_cache(cache_path(cache_dir, "daily", d))
+        if saved and by_day[d]:
+            digest = prompt_hash(build_prompt(d, by_day[d], stats["per_day"][d]), SYSTEM, SUMMARY_SCHEMA)
+            out[d] = (saved["summary"], saved.get("prompt_sha256") == digest)
+    return out
 
 
 # ---------------------------------------------------------------- charts
@@ -501,6 +611,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 ul.todo{list-style:none;padding:0}ul.todo li::before{content:"☐ ";color:var(--muted)}
 .q{border-left:3px solid var(--fg);padding:2px 12px;margin:10px 0}.q p{margin:2px 0;color:var(--muted)}
 .sub{color:var(--muted);font-size:13px}.foot{margin-top:40px;color:var(--muted);font-size:12.5px}
+a{color:var(--fg);text-underline-offset:2px}.pnav{font-size:13px;color:var(--muted);margin:0 0 20px}.pnav .off{opacity:.45}
 @media (max-width:560px){.hbar{grid-template-columns:110px 1fr 32px}.props{grid-template-columns:90px 1fr}}
 """
 MIX_COLORS = ["#2f6fde", "#d9773b", "#8a63d2", "#2e9d6a", "#d4b24c", "#c24f6b", "#4aa3b5", "#9b9b9b"]
@@ -522,12 +633,12 @@ def chips(items):
     return "".join(f'<span class="chip">{esc(x)}</span>' for x in items)
 
 
-def page_head(tab, icon, title, props):
-    """<head>, icon, title and the Notion-style property list [(name, html)]."""
+def page_head(tab, icon, title, props, nav=""):
+    """<head>, the ← · → nav row, icon, title and the Notion-style property list [(name, html)]."""
     rows = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in props)
     return (f'<!doctype html><html lang="ko"><head><meta charset="utf-8">\n'
-            f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(tab)}</title>'
-            f'<style>{CSS}</style></head>\n<body><main><div class="icon">{icon}</div><h1>{esc(title)}</h1>\n'
+            f'<meta name="viewport" content="width=device-width,initial-scale=1">{GENERATOR}<title>{esc(tab)}</title>'
+            f'<style>{CSS}</style></head>\n<body><main>{nav}<div class="icon">{icon}</div><h1>{esc(title)}</h1>\n'
             f'<dl class="props">{rows}</dl>')
 
 
@@ -594,13 +705,14 @@ def reflection(question):
     return f'<h2>✍️ 회고 한 줄</h2><div class="q"><b>{question}</b><p>(직접 작성)</p></div>'
 
 
-def foot(summary):
-    note = ("숫자는 로그에서 계산 · 요약은 Claude가 작성" if summary
-            else f"숫자만 표시 — {esc(LAST_FAILURE or '요약 없음')}")
-    return f'<p class="foot">{note}</p></main></body></html>'
+def foot(summary, note=""):
+    """note: from cached_summary — the summary was reused, or an older one is shown."""
+    note = (f"숫자는 로그에서 계산 · {note or '요약은 Claude가 작성'}" if summary
+            else f"숫자만 표시 — {LAST_FAILURE or '요약 없음'}")
+    return f'<p class="foot">{esc(note)}</p></main></body></html>'
 
 
-def render_page(day, stats, summary, all_events):
+def render_page(day, stats, summary, all_events, nav="", note=""):
     s = summary or {}
     name = labeler(summary)
     title = f"{day.year}년 {day.month}월 {day.day}일 ({WEEKDAYS[day.weekday()]}) 일간 회고"
@@ -608,7 +720,7 @@ def render_page(day, stats, summary, all_events):
     projects = merge_projects(stats["projects"], name)
     parts = [page_head(f"일간 회고 {day}", "🗓", title, [
         ("프로젝트", chips(p for p, _ in projects[:4]) or "–"), ("활동 시간", span),
-        ("데이터 출처", chips(stats["sources"])), ("기기", esc(", ".join(stats["hosts"])))]), callout(s)]
+        ("데이터 출처", chips(stats["sources"])), ("기기", esc(", ".join(stats["hosts"])))], nav), callout(s)]
     hour_keys = {k for k, _, _ in SERIES if any(stats["hours"][h].get(k) for h in stats["hours"])}
     parts.append("<h2>📊 오늘의 숫자</h2>" + kpis(stats)
                  + f"<h2>⏱ 시간대별 활동</h2>{legend(hour_keys)}{hour_chart(stats['hours'])}")
@@ -622,25 +734,35 @@ def render_page(day, stats, summary, all_events):
     parts.append(lists(s, (("tomorrow", "➡️ 내일로"),), ' class="todo"'))
     parts.append(reflection("오늘 가장 의미 있었던 일은?"))
     parts.append(f"<h2>📈 최근 7일</h2>{legend(AI_KEYS)}{week_chart(all_events, day)}")
-    parts.append(foot(summary))
+    parts.append(foot(summary, note))
     return "".join(parts)
 
 
 WEEK_KEYS = AI_KEYS | {"git"}  # the weekly chart also stacks commits
 
 
-def render_week(days, stats, summary, events, today=None):
-    """Weekly page: same look as the daily one; days after today are left empty."""
+def week_span(days):
+    """2026년 9월 21일 – 27일"""
+    a, b = days[0], days[-1]
+    end = f"{b.day}일" if b.month == a.month else f"{b.month}월 {b.day}일"
+    return f"{a.year}년 {a.month}월 {a.day}일 – {end}"
+
+
+def render_week(days, stats, summary, events, today=None, nav="", note="", day_links=None):
+    """Weekly page: same look as the daily one; days after today are left empty.
+
+    day_links: {day: href} of the daily pages that exist; the 날짜별 table links to them.
+    """
     s = summary or {}
     name = labeler(summary)
     today = today or dt.date.today()
+    day_links = day_links or {}
     a, b = days[0], days[-1]
-    end = f"{b.day}일" if b.month == a.month else f"{b.month}월 {b.day}일"
-    title = f"{a.year}년 {a.month}월 {a.day}일 – {end} 주간 회고"
+    title = f"{week_span(days)} 주간 회고"
     projects = merge_projects(stats["projects"], name)
     parts = [page_head(f"주간 회고 {a}", "📅", title, [
         ("프로젝트", chips(p for p, _ in projects[:4]) or "–"), ("기간", f"{a:%m/%d} (월) – {b:%m/%d} (일)"),
-        ("데이터 출처", chips(stats["sources"])), ("기기", esc(", ".join(stats["hosts"])))]), callout(s)]
+        ("데이터 출처", chips(stats["sources"])), ("기기", esc(", ".join(stats["hosts"])))], nav), callout(s)]
     parts.append("<h2>📊 이번 주 숫자</h2>" + kpis(stats, [(f"{stats['active_days']}일", "활동한 날 (7일 중)")]))
     parts.append(f"<h2>📈 요일별 활동</h2>{legend(WEEK_KEYS)}"
                  + week_chart(events, today, days=days, keys=WEEK_KEYS, label="요일별 활동"))
@@ -654,6 +776,8 @@ def render_week(days, stats, summary, events, today=None):
             continue
         top = merge_projects(ds["projects"], name)
         span = f"{ds['first']:%H:%M}–{ds['last']:%H:%M}" if ds["first"] else "–"
+        if d in day_links:
+            label = f'<a href="{esc(day_links[d])}">{label}</a>'
         rows.append(f'<tr><td>{label}</td><td class="num">{ds["prompts"]}</td><td class="num">{ds["commits"]}</td>'
                     f'<td>{esc(top[0][0]) if top else "–"}</td><td>{span}</td></tr>')
     parts.append('<h2>📅 날짜별</h2><table><tr><th>날짜</th><th class="num">내 지시</th><th class="num">커밋</th>'
@@ -666,15 +790,131 @@ def render_week(days, stats, summary, events, today=None):
     parts.append(people_and_ai(stats))
     parts.append(lists(s, (("next_week", "➡️ 다음 주로"),), ' class="todo"'))
     parts.append(reflection("이번 주 가장 의미 있었던 일은?"))
-    parts.append(foot(summary))
+    parts.append(foot(summary, note))
     return "".join(parts)
 
 
-def write_page(out, page):
-    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-    with open(out, "w", encoding="utf-8") as f:
-        f.write(page)
-    print(f"wrote {out}", file=sys.stderr)
+def write_page(out, page, quiet=False):
+    write_file(out, page)
+    if not quiet:
+        print(f"wrote {out}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------- nav + index (all pages sit in one folder)
+GENERATOR = '<meta name="generator" content="retro">'  # marks files retro may rewrite
+PAGE_RE = re.compile(r"(daily|weekly)-(\d{4}-\d{2}-\d{2})\.html")
+NAV_RE = re.compile(r'<nav class="pnav">.*?</nav>', re.S)
+
+
+def page_file(kind, day):
+    return f"{kind}-{day}.html"
+
+
+def site_pages(site_dir):
+    """{"daily": {dates}, "weekly": {mondays}} of the pages in site_dir."""
+    found = {"daily": set(), "weekly": set()}
+    try:
+        names = os.listdir(site_dir)
+    except OSError:
+        names = []
+    for n in names:
+        m = PAGE_RE.fullmatch(n)
+        if m:
+            try:
+                found[m.group(1)].add(dt.date.fromisoformat(m.group(2)))
+            except ValueError:
+                pass
+    return found
+
+
+def nav_item(text, href):
+    return f'<a href="{href}">{text}</a>' if href else f'<span class="off">{text}</span>'
+
+
+def page_nav(kind, day, pages):
+    """The row at the top of a page; links only to pages that exist (relative names, works from file://)."""
+    have = pages[kind]
+    prev = max((d for d in have if d < day), default=None)
+    nxt = min((d for d in have if d > day), default=None)
+    prev, nxt = (d and page_file(kind, d) for d in (prev, nxt))
+    if kind == "daily":
+        monday = week_days(day)[0]
+        items = [nav_item("← 이전 날", prev),
+                 nav_item("주간 보기", page_file("weekly", monday) if monday in pages["weekly"] else None),
+                 nav_item("목록", "index.html"), nav_item("다음 날 →", nxt)]
+    else:
+        items = [nav_item("← 지난주", prev), nav_item("목록", "index.html"), nav_item("다음 주 →", nxt)]
+    return '<nav class="pnav">' + " · ".join(items) + "</nav>"
+
+
+def refresh_navs(site_dir, pages):
+    """Pages made earlier get links to pages made since (the next day, the week's page).
+
+    Only pages that already have a nav row are touched; older pages get one when re-rendered.
+    """
+    for kind in ("daily", "weekly"):
+        for d in pages[kind]:
+            path = os.path.join(site_dir, page_file(kind, d))
+            try:
+                with open(path, encoding="utf-8") as f:
+                    page = f.read()
+            except OSError:
+                continue
+            if not NAV_RE.search(page):
+                continue
+            new = NAV_RE.sub(lambda _: page_nav(kind, d, pages), page, count=1)
+            if kind == "weekly":  # 날짜별 table: link days whose daily page appeared later
+                for x in week_days(d):
+                    label = f"{x:%m/%d} ({WEEKDAYS[x.weekday()]})"
+                    if x in pages["daily"]:
+                        new = new.replace(f"<td>{label}</td>", f'<td><a href="{page_file("daily", x)}">{label}</a></td>', 1)
+            if new != page:
+                write_page(path, new, quiet=True)
+
+
+def write_index(site_dir, cache_dir, pages):
+    """index.html: newest week first — its weekly page, then each day with the saved one-liner and counts."""
+    path = os.path.join(site_dir, "index.html")
+    try:
+        with open(path, encoding="utf-8") as f:
+            if GENERATOR not in f.read():
+                return  # someone else's index.html (render.py --out can point anywhere)
+    except OSError:
+        pass
+    weeks = sorted({week_days(d)[0] for d in pages["daily"]} | pages["weekly"], reverse=True)
+    parts = [page_head("회고 목록", "🗂", "회고 목록",
+                       [("일간", f"{len(pages['daily'])}개"), ("주간", f"{len(pages['weekly'])}개")])]
+    for monday in weeks:
+        days = week_days(monday)
+        if monday in pages["weekly"]:
+            parts.append(f'<h2><a href="{page_file("weekly", monday)}">{week_span(days)} 주간 회고</a></h2>')
+        else:
+            parts.append(f'<h2>{week_span(days)} <span class="sub">· 주간 페이지 없음 (retro week --date {monday})</span></h2>')
+        saved = read_cache(cache_path(cache_dir, "weekly", monday))
+        if saved and saved["summary"].get("one_line"):
+            parts.append(f'<p class="sub">{esc(saved["summary"]["one_line"])}</p>')
+        rows = []
+        for d in reversed(days):
+            if d not in pages["daily"]:
+                continue
+            saved = read_cache(cache_path(cache_dir, "daily", d)) or {}
+            s, n = saved.get("summary", {}), saved.get("numbers", {})
+            rows.append(f'<tr><td><a href="{page_file("daily", d)}">{d:%m/%d} ({WEEKDAYS[d.weekday()]})</a></td>'
+                        f'<td>{esc(s.get("one_line", ""))}</td><td class="num">{esc(n.get("prompts", ""))}</td>'
+                        f'<td class="num">{esc(n.get("commits", ""))}</td></tr>')
+        if rows:
+            parts.append('<table><tr><th>날짜</th><th>한 줄 요약</th><th class="num">내 지시</th><th class="num">커밋</th></tr>'
+                         + "".join(rows) + "</table>")
+    if not weeks:
+        parts.append('<p class="sub">아직 페이지가 없습니다.</p>')
+    parts.append('<p class="foot">retro를 실행할 때마다 새로 만듭니다 · 한 줄 요약과 숫자는 저장된 요약에서</p></main></body></html>')
+    write_page(path, "".join(parts), quiet=True)
+
+
+def update_site(site_dir, cache_dir):
+    pages = site_pages(site_dir)
+    refresh_navs(site_dir, pages)
+    write_index(site_dir, cache_dir, pages)
 
 
 def main(argv=None):
@@ -686,6 +926,8 @@ def main(argv=None):
                    help="summary backend (auto: API key → claude CLI → numbers only)")
     p.add_argument("--no-llm", action="store_true", help="same as --llm none")
     p.add_argument("--out", help="output HTML path (default: retro_out/daily-DATE.html or weekly-MONDAY.html)")
+    p.add_argument("--refresh", action="store_true", help="summarize again even if the saved summary matches the logs")
+    p.add_argument("--cache-dir", help="where summaries are saved and reused (default: the folder of --out)")
     args = p.parse_args(argv)
 
     all_events = load(args.events)
@@ -697,20 +939,34 @@ def main(argv=None):
         if not any(by_day.values()):
             print(f"no events in the week of {days[0]}", file=sys.stderr)
             return 1
+        out = args.out or os.path.join("retro_out", f"weekly-{days[0]}.html")
+        site = os.path.dirname(out) or "."
+        cache_dir = args.cache_dir or site
         stats = week_stats(by_day)
-        summary = get_summary(choice, build_week_prompt(days, by_day, stats), WEEK_SYSTEM, WEEK_SCHEMA, WEEK_TASK)
+        prompt = build_week_prompt(days, by_day, stats, saved_dailies(days, by_day, stats, cache_dir))
+        summary, note = cached_summary(choice, prompt, WEEK_SYSTEM, WEEK_SCHEMA, WEEK_TASK,
+                                       cache_path(cache_dir, "weekly", days[0]), args.refresh,
+                                       {"prompts": stats["prompts"], "commits": stats["commits"]})
         events = [e for evs in by_day.values() for e in evs]
-        write_page(args.out or os.path.join("retro_out", f"weekly-{days[0]}.html"),
-                   render_week(days, stats, summary, events))
+        pages = site_pages(site)
+        write_page(out, render_week(days, stats, summary, events, nav=page_nav("weekly", days[0], pages), note=note,
+                                    day_links={d: page_file("daily", d) for d in days if d in pages["daily"]}))
+        update_site(site, cache_dir)
         return 0
 
     events = [e for e in all_events if e["ts"].date() == day]
     if not events:
         print(f"no events on {day}", file=sys.stderr)
         return 1
+    out = args.out or os.path.join("retro_out", f"daily-{day}.html")
+    site = os.path.dirname(out) or "."
+    cache_dir = args.cache_dir or site
     stats = day_stats(events)
-    summary = get_summary(choice, build_prompt(day, events, stats))
-    write_page(args.out or os.path.join("retro_out", f"daily-{day}.html"), render_page(day, stats, summary, all_events))
+    summary, note = cached_summary(choice, build_prompt(day, events, stats), SYSTEM, SUMMARY_SCHEMA, DAILY_TASK,
+                                   cache_path(cache_dir, "daily", day), args.refresh,
+                                   {"prompts": stats["prompts"], "commits": stats["commits"]})
+    write_page(out, render_page(day, stats, summary, all_events, nav=page_nav("daily", day, site_pages(site)), note=note))
+    update_site(site, cache_dir)
     return 0
 
 

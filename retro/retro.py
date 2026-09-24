@@ -7,6 +7,8 @@
   retro                          today's page (collect this Mac + saved hosts, summarize, open)
   retro --date 2026-09-23        a specific day
   retro week                     this week's page, Mon–Sun (--date 2026-09-23: that day's week)
+  retro --refresh                summarize again (by default a saved summary is reused while the logs are unchanged)
+                                 ~/Retro/index.html lists every page; each page links to the day/week before and after
   retro add-host "ssh -p 10024 me@100.76.129.71"   also collect from a server, every run
   retro hosts | remove-host NAME
   retro add-repo ~/code          also collect commits from repos here (a repo, or a folder of repos),
@@ -186,11 +188,16 @@ def render_and_open(argv, out, no_open):
     return 0
 
 
+def cache_args(args):
+    """summaries are saved as JSON next to the pages and reused while the logs are unchanged"""
+    return ["--cache-dir", OUT_DIR] + (["--refresh"] if getattr(args, "refresh", False) else [])
+
+
 def cmd_run(args):
     day = dt.date.fromisoformat(args.date) if args.date else dt.date.today()
     days = (dt.date.today() - day).days + 7  # enough history for the 7-day chart
     path = collect_all(day, days, args.no_chrome)
-    return render_and_open(["--date", str(day), "--llm", args.llm, path],
+    return render_and_open(["--date", str(day), "--llm", args.llm, path] + cache_args(args),
                            os.path.join(OUT_DIR, f"daily-{day}.html"), args.no_open)
 
 
@@ -201,7 +208,7 @@ def cmd_week(args):
     monday = render.week_days(day)[0]
     end = min(monday + dt.timedelta(days=6), today)  # days after today have no logs yet
     path = collect_all(end, max((today - monday).days, 0) + 1, args.no_chrome)
-    return render_and_open(["--week", "--date", str(day), "--llm", args.llm, path],
+    return render_and_open(["--week", "--date", str(day), "--llm", args.llm, path] + cache_args(args),
                            os.path.join(OUT_DIR, f"weekly-{monday}.html"), args.no_open)
 
 
@@ -363,6 +370,8 @@ def page_options(p, sub=False):
                    help="summary backend (auto: API key → claude CLI → numbers only)")
     p.add_argument("--no-chrome", action="store_true", default=keep or False)
     p.add_argument("--no-open", action="store_true", default=keep or False, help="don't open the page in a browser")
+    p.add_argument("--refresh", action="store_true", default=keep or False,
+                   help="summarize again even if the saved summary matches the logs")
 
 
 def main():
