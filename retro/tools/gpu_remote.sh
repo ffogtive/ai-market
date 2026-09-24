@@ -26,7 +26,10 @@ echo "· claude $("$CLAUDE_BIN" --version 2>&1 | head -1) ($CLAUDE_BIN), node $(
 # tmux starts a non-login shell with another PATH, which found an older claude on CentOS 7's old Node
 # ("ReadableStream is not defined"): hand it this login shell's PATH and the exact claude found here.
 # If it stops, keep its message on screen instead of the window vanishing with "[exited]".
-RUN="export PATH='$PATH'; cd '$DIR' && '$CLAUDE_BIN' remote-control --spawn=same-dir; code=\$?; echo; echo \"[retro] claude remote-control 종료 (코드 \$code). 위 메시지를 확인하세요. Enter를 누르면 닫힙니다.\"; read _"
+# --spawn is newer than some installs (2.1.272 on the server rejects it): pass it only when supported
+SPAWN=""
+"$CLAUDE_BIN" remote-control --help 2>&1 | grep -q -- "--spawn" && SPAWN="--spawn=same-dir"
+RUN="export PATH='$PATH'; cd '$DIR' && '$CLAUDE_BIN' remote-control $SPAWN; code=\$?; echo; echo \"[retro] claude remote-control 종료 (코드 \$code). 위 메시지를 확인하세요. Enter를 누르면 닫힙니다.\"; read _"
 if command -v tmux >/dev/null; then
   if tmux has-session -t claude-rc 2>/dev/null; then
     case "$(tmux list-panes -t claude-rc -F '#{pane_current_command}' 2>/dev/null | head -1)" in
