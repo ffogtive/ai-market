@@ -156,14 +156,21 @@ def build_prompt(day, events, stats):
     return f"{facts}\n\n<log>\n" + "\n".join(lines) + "\n</log>"
 
 
-def summarize_cli(day, events, stats):
-    """Headless Claude Code: no API key needed, no tools, nothing saved as a session."""
+def summarize_cli(day, events, stats, drop_api_key=False):
+    """Headless Claude Code: no API key needed, no tools, nothing saved as a session.
+
+    drop_api_key: the key already failed, so make the CLI use the user's own
+    Claude login instead of that key (the CLI prefers an API key when one is set).
+    """
+    env = None
+    if drop_api_key:
+        env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
     with tempfile.TemporaryDirectory() as cwd:  # keep project CLAUDE.md files out of the prompt
         res = subprocess.run(
             ["claude", "-p", SYSTEM + "\n\n표준 입력의 로그로 일간 회고를 작성하세요.",
              "--output-format", "json", "--json-schema", json.dumps(SUMMARY_SCHEMA),
              "--tools", "", "--no-session-persistence"],
-            input=build_prompt(day, events, stats), capture_output=True, text=True, cwd=cwd, timeout=900)
+            input=build_prompt(day, events, stats), capture_output=True, text=True, cwd=cwd, env=env, timeout=900)
     try:
         out = json.loads(res.stdout)
     except json.JSONDecodeError:
@@ -389,6 +396,7 @@ def main(argv=None):
     stats = day_stats(events)
 
     summary = None
+    api_failed = False
     backend = None if args.no_llm else pick_backend(args.llm)
     if backend == "api":
         try:
@@ -412,11 +420,11 @@ def main(argv=None):
                 print(f"summary unusable: {e}", file=sys.stderr)
         # auto: a stale or invalid API key shouldn't cost the summary when Claude Code is installed
         if not summary and args.llm == "auto" and shutil.which("claude"):
-            print("· API 요약 실패 → claude CLI로 재시도", file=sys.stderr)
-            backend = "claude"
+            print("· API 요약 실패 → claude CLI(내 Claude 로그인)로 재시도", file=sys.stderr)
+            backend, api_failed = "claude", True
     if backend == "claude":
         try:
-            summary = summarize_cli(day, events, stats)
+            summary = summarize_cli(day, events, stats, drop_api_key=api_failed)
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as e:
             print(f"summary failed ({e}) — rendering numbers only", file=sys.stderr)
     print(f"· 요약: {backend or '없음 (숫자만)'}{'' if summary or not backend else ' 실패'}", file=sys.stderr)
