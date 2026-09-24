@@ -98,14 +98,27 @@ def text_of(content):
     return ""
 
 
+NOISE_PREFIXES = (
+    "<",  # system reminders, command wrappers, environment context
+    "Caveat:",
+    "[Request interrupted",
+    "This session is being continued from a previous conversation",  # auto context summary
+    "The following is the Codex agent history",  # Codex auto-approval reviewer, not the user
+    "You are ",  # sub-agent / reviewer system prompts
+)
+
+
 def is_noise(text):
     t = text.strip()
-    return (
-        not t
-        or t.startswith("<")  # system reminders, command wrappers, environment context
-        or t.startswith("Caveat:")
-        or t.startswith("[Request interrupted")
-    )
+    return not t or t.startswith(NOISE_PREFIXES)
+
+
+def strip_attachments(text):
+    """Codex prefixes pasted files as '# Files mentioned by the user: ...'; keep only the request."""
+    if text.lstrip().startswith("# Files mentioned by the user"):
+        m = re.search(r"##\s*My request for Codex:?\s*(.*)", text, re.S)
+        return ("[첨부] " + m.group(1)) if m else "[첨부 파일]"
+    return text
 
 
 # ---------------------------------------------------------------- Claude Code
@@ -152,6 +165,7 @@ def collect_codex(since, until):
                 text = payload.get("message", "")
             elif payload.get("type") == "message" and payload.get("role") == "user":
                 text = text_of(payload.get("content"))
+            text = strip_attachments(text)
             if is_noise(text):
                 continue
             ts = parse_ts(rec.get("timestamp") or payload.get("timestamp")) or file_ts
@@ -215,6 +229,8 @@ def collect_git(since, until, roots, max_depth, author):
                     continue
                 head, _, stat = chunk.partition("\n")
                 meta, _, subject = head.partition("\x1f")
+                if re.match(r"(backup|auto|chore\(backup\))[:\s]", subject, re.I):
+                    continue
                 ts = parse_ts(int(meta.split(" ")[0])) if meta.split(" ")[0].isdigit() else None
                 if not ts:
                     continue
@@ -434,8 +450,19 @@ def render_timeline(events):
     return "\n".join(lines)
 
 
+def dedupe(events):
+    """The same prompt often lands in several parallel sessions; keep the first."""
+    seen, out = set(), []
+    for e in sorted(events, key=lambda e: e["ts"]):
+        key = (e["source"], e["ts"].strftime("%Y%m%d%H%M"), e["text"][:80])
+        if key not in seen:
+            seen.add(key)
+            out.append(e)
+    return out
+
+
 def write_outputs(events, out_dir, to_stdout=False):
-    events.sort(key=lambda e: e["ts"])
+    events[:] = dedupe(events)
     timeline = render_timeline(events)
     if to_stdout:
         print(timeline)
