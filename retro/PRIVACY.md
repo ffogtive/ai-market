@@ -31,8 +31,9 @@
 | YouTube | 사용자가 지정한 Google Takeout 파일(`--youtube`) | 지정할 때만 |
 | 다른 기기 | `retro add-host`로 등록한 ssh 호스트에서 같은 수집기 실행 | 사용자의 ssh 키 사용, 비밀번호 저장 안 함 |
 
-- **쓰는 곳:** `~/Retro/`(events.jsonl, daily-날짜.html, retro.log), `~/.config/retro/config.json`(등록한 호스트), macOS 예약 실행 시 `~/Library/LaunchAgents/`.
-- **요약(`render.py`):** 서술 요약이 필요할 때만 하루 타임라인을 **사용자 자신의 Anthropic 계정**으로 보냅니다(`ANTHROPIC_API_KEY` 또는 설치된 `claude -p`). retro 서버를 거치지 않습니다. `--llm none`이면 외부 전송 없이 숫자만 계산합니다.
+- **쓰는 곳:** `~/Retro/`(events.jsonl, daily-날짜.html, weekly-월요일날짜.html, index.html, retro.log, 요약 JSON), `~/.config/retro/config.json`(등록한 호스트), macOS 예약 실행 시 `~/Library/LaunchAgents/`.
+- **요약 저장:** Claude가 쓴 요약 결과(한 줄 요약·한 일·결정 등)를 `~/Retro/summary-daily-날짜.json`·`summary-weekly-월요일날짜.json`에 저장합니다. 로그 원문은 넣지 않고, 로그가 바뀌었는지 비교할 해시(SHA-256)와 만든 시각·지시·커밋 수만 함께 둡니다. 내 컴퓨터에만 남으며, 지우면 다음 실행 때 다시 요약합니다.
+- **요약(`render.py`):** 서술 요약이 필요할 때만 하루 타임라인을 **사용자 자신의 Anthropic 계정**으로 보냅니다(`ANTHROPIC_API_KEY` 또는 설치된 `claude -p`). 주간 요약에는 저장된 일간 요약도 함께 보냅니다. retro 서버를 거치지 않습니다. 로그가 그대로면 저장된 요약을 다시 쓰고 아무것도 보내지 않습니다. `--llm none`이면 외부 전송 없이 숫자만 계산합니다.
 - **소스 끄기:** `retro sources`로 무엇을 읽는지 보고, `retro off <소스>`로 끕니다(`~/.config/retro/config.json`에 저장, 등록한 서버에도 적용).
 - **하지 않는 것:** Keychain·브라우저 쿠키 읽기, 키 입력·화면 기록.
 - **권한:** Chrome 기록을 읽을 때 macOS가 터미널에 전체 디스크 접근 권한을 요구할 수 있습니다. 싫으면 `retro off chrome`(확장이 방문 기록을 대신 제공).
