@@ -194,9 +194,56 @@ def counts(stderr):
 
 
 # ---------------------------------------------------------------- commands
+# ---------------------------------------------------------------- last good collection per source
+# A scheduled run (launchd) often can't use the ssh key or read Chrome's history. Rather than a page
+# quietly built from less, a failed server/Chrome falls back to its last successful collection.
+SNAP_DIR = os.path.join(OUT_DIR, "sources")
+LAST_FAILURES = []  # what the last collect_all could not collect, for the page's 관측 범위
+
+
+def snap_path(name):
+    return os.path.join(SNAP_DIR, re.sub(r"[^A-Za-z0-9._-]", "_", name) + ".jsonl")
+
+
+def save_snapshot(name, events):
+    os.makedirs(SNAP_DIR, exist_ok=True)
+    tmp = snap_path(name) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.writelines(json.dumps(e, ensure_ascii=False) + "\n" for e in events)
+    os.replace(tmp, snap_path(name))
+
+
+def load_snapshot(name):
+    """(events, 'MM-DD HH:MM' it was saved) of the last successful collection, or ([], "")."""
+    try:
+        with open(snap_path(name), encoding="utf-8") as f:
+            events = parse_jsonl(f.read())
+        return events, dt.datetime.fromtimestamp(os.path.getmtime(snap_path(name))).strftime("%m-%d %H:%M")
+    except OSError:
+        return [], ""
+
+
+def fall_back(name, label, why):
+    """A source that failed this run: its last good events (if any), and a line for 관측 범위."""
+    events, when = load_snapshot(name)
+    note = f"{label}: {why}" + (f" — 마지막 성공({when}) 기록으로 대신함" if events else " — 이번 회고에서 빠짐")
+    LAST_FAILURES.append(note)
+    print(f"⚠️  {note}", file=sys.stderr)
+    return events
+
+
+def failed_args():
+    return [a for note in LAST_FAILURES for a in ("--failed", note)]
+
+
 def collect_all(day, days, no_chrome, path=None):
-    """This machine + browser extension + saved servers → ~/Retro/events.jsonl (or path); returns its path."""
+    """This machine + browser extension + saved servers → ~/Retro/events.jsonl (or path); returns its path.
+
+    Failed servers / Chrome fall back to their last successful collection (see LAST_FAILURES).
+    """
     cfg = load_config()
+    save = path is None  # --preview collects into a temp file and must not touch ~/Retro
+    LAST_FAILURES.clear()
     path = path or os.path.join(OUT_DIR, "events.jsonl")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     off = cfg.get("off", [])
@@ -204,8 +251,15 @@ def collect_all(day, days, no_chrome, path=None):
         print(f"· 꺼진 소스: {', '.join(off)} (켜기: retro on <소스>)", file=sys.stderr)
     ext_events = [] if "extension" in off else extension_events(day, days)
     # the extension already records browsing; reading Chrome's DB too would double count
-    events, err = collect_local(days, chrome=not no_chrome and not ext_events, off=off, extra=git_root_args(cfg))
+    chrome = not no_chrome and not ext_events and "chrome" not in off
+    events, err = collect_local(days, chrome=chrome, off=off, extra=git_root_args(cfg))
     print(f"· 이 기기: {counts(err)}", file=sys.stderr)
+    if chrome:
+        if "[chrome] cannot read" in err:
+            events = [e for e in events if e.get("source") != "chrome"]
+            events += fall_back("local-chrome", "chrome", "기록을 읽을 권한 없음(자동 실행에서 흔함)")
+        elif save:
+            save_snapshot("local-chrome", [e for e in events if e.get("source") == "chrome"])
     if ext_events:
         by = {}
         for e in ext_events:
@@ -214,8 +268,14 @@ def collect_all(day, days, no_chrome, path=None):
         events += ext_events
     for ssh_cmd in cfg.get("hosts", []):
         got, err = collect_remote(ssh_cmd, days, off)
-        status = counts(err) if got or "events" in err else f"실패 — {err.strip().splitlines()[-1] if err.strip() else '응답 없음'}"
-        print(f"· {host_name(ssh_cmd)}: {status}", file=sys.stderr)
+        name = host_name(ssh_cmd)
+        if got or "events" in err:
+            print(f"· {name}: {counts(err)}", file=sys.stderr)
+            if save:
+                save_snapshot("host-" + name, got)
+        else:
+            why = err.strip().splitlines()[-1] if err.strip() else "응답 없음"
+            got = fall_back("host-" + name, f"서버 {name}", f"연결 실패({why[:80]})")
         events += got
 
     apply_aliases(events, cfg.get("aliases"))  # before anything reads the events: pages, summaries, the app
@@ -258,7 +318,7 @@ def cmd_run(args):
     if getattr(args, "preview", False):
         return preview(["--date", str(day)], day, days, args)
     path = collect_all(day, days, args.no_chrome)
-    return render_and_open(["--date", str(day), "--llm", args.llm, path] + cache_args(args) + off_args(args),
+    return render_and_open(["--date", str(day), "--llm", args.llm, path] + cache_args(args) + off_args(args) + failed_args(),
                            os.path.join(OUT_DIR, f"daily-{day}.html"), args.no_open)
 
 
@@ -271,8 +331,8 @@ def cmd_week(args):
     if getattr(args, "preview", False):
         return preview(["--week", "--date", str(day)], end, max((today - monday).days, 0) + 7, args)
     path = collect_all(end, max((today - monday).days, 0) + 7, args.no_chrome)  # back to the Monday before
-    return render_and_open(["--week", "--date", str(day), "--llm", args.llm, path] + cache_args(args) + off_args(args),
-                           os.path.join(OUT_DIR, f"weekly-{monday}.html"), args.no_open)
+    return render_and_open(["--week", "--date", str(day), "--llm", args.llm, path] + cache_args(args) + off_args(args)
+                           + failed_args(), os.path.join(OUT_DIR, f"weekly-{monday}.html"), args.no_open)
 
 
 def cmd_add_host(args):
@@ -420,6 +480,10 @@ def forget_targets(day=None):
         except OSError:
             names = []
         names = [n for n in names if RETRO_FILE_RE.fullmatch(TMP_RE.sub(r"\1", n))]
+        try:  # last good collection per server / Chrome (see save_snapshot)
+            names += [os.path.join("sources", n) for n in sorted(os.listdir(SNAP_DIR)) if n.endswith((".jsonl", ".tmp"))]
+        except OSError:
+            pass
     out = []
     for n in names:
         path = os.path.join(OUT_DIR, n)
